@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading Lean, part 2: statements and theorems</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 6</p>
+<h1>Reading Lean, part 2: statements and theorems</h1>
+<p class="lede">The second of three lessons on reading Lean. It covers statements, which a
+program can't always compute but Lean can prove, and theorems, which prove them. The spec in
+Lesson 7 is written in both.</p>
+
+<p>This lesson builds on the functions and data types of
+<a href="05-reading-lean.html">Lesson 5</a>. As there, every example is real code from the
+repository at <code>stage-6</code>.</p>
+
+<h2>Statements: <code>Prop</code> versus <code>Bool</code></h2>
+<p>This is the first real difference from C++. A <code>Bool</code> is a runtime value,
+<code>true</code> or <code>false</code>. A <code>Prop</code> is a <em>statement</em>, which might be
+true or false and which you might be able to prove. <code>2 + 2 = 4</code> is a Prop. So is
+"every list has a latest reading", which you can't compute but can prove.</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Spec/Prog.lean:66-73">/-- HTTP success. -/
+def ok2xx (status : Nat) : Prop := 200 ≤ status ∧ status &lt; 300
+
+instance (s : Nat) : Decidable (ok2xx s) := by unfold ok2xx; infer_instance
+
+/-- The world delivered this POST. -/
+def Delivered (w : World) (q : Request) : Prop :=
+  ∃ status, w.post q = .response status ∧ ok2xx status</code></pre>
+<p><code>ok2xx</code> is a statement about a status code (<code>∧</code> is "and"; the table at the
+end of this lesson lists the other symbols). A Prop can't go in an <code>if</code> by itself,
+because Lean has no general way to compute whether a statement is true. The
+<code>instance … Decidable</code> line supplies a way for <code>ok2xx</code>, so the program may use
+<code>if ok2xx st then …</code>; without it, that <code>if</code> fails to compile. An
+<code>instance</code> is roughly like specializing <code>std::hash</code> for your own type: it tells
+the compiler how to provide something, here <code>Decidable (ok2xx s)</code> for any
+<code>s</code>, and the compiler finds it whenever it's needed.</p>
+<p>The part after <code>by</code> builds that instance using <strong>tactics</strong>, which
+<a href="09-lean-proofs.html">Lesson 9</a> covers. Briefly: <code>unfold ok2xx</code> replaces
+<code>ok2xx s</code> with its definition, <code>200 ≤ s ∧ s &lt; 300</code>, and
+<code>infer_instance</code> asks Lean to build the instance from ones it already has: comparisons
+of <code>Nat</code>s are decidable, and so is an "and" of two decidable statements. The
+<code>unfold</code> is needed because Lean's search for instances doesn't look inside a
+<code>def</code>.</p>
+<p><code>Delivered</code> says "there exists a status such that the world answered the POST with that
+status, and it's 2xx". It's never computed; it only appears in theorems.</p>
+
+<h2>A spec and its implementation</h2>
+<p>Specs are written as Props so they can say things code can't, like "for every list" or
+"there exists an index". The implementation is written with Bools so it can run. Compare the
+spec of a decimal's value with the implementation of comparison:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Spec/Decimal.lean:12-13">/-- The rational number a `Dec` denotes: `m / 10^e`. All semantics go through this. -/
+def Dec.val (d : Dec) : Rat := (d.m : Rat) / ((10 ^ d.e : Nat) : Rat)</code></pre>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Impl/Decimal.lean:7-9">/-- Exact comparison `a ≤ b`, by cross-multiplying: `a.m·10^b.e ≤ b.m·10^a.e`. -/
+def Dec.le (a b : Dec) : Bool :=
+  decide (a.m * ((10 ^ b.e : Nat) : Int) ≤ b.m * ((10 ^ a.e : Nat) : Int))</code></pre>
+<ul>
+  <li><code>Dec.val</code> and <code>Dec.le</code> are the functions <code>val</code> and
+  <code>le</code> in the namespace <code>Dec</code>. With a dot call, <code>d.val</code> is
+  <code>Dec.val d</code>, and <code>a.le b</code> is <code>Dec.le a b</code>.</li>
+  <li><code>(x : T)</code> means "<code>x</code>, as a <code>T</code>", and converts when needed, like
+  <code>static_cast&lt;T&gt;(x)</code>. <code>Dec.val</code> converts <code>d.m</code> to a
+  <code>Rat</code> and divides it by <code>10 ^ d.e</code>, also converted, so the result is an exact
+  fraction. In <code>Dec.le</code>, <code>((10 ^ b.e : Nat) : Int)</code> computes
+  <code>10 ^ b.e</code> as a <code>Nat</code> and then converts it to an <code>Int</code>, so it can
+  be multiplied by <code>a.m</code>.</li>
+  <li><code>Dec.le</code> returns a <code>Bool</code>, but the comparison in its body is a Prop.
+  <code>decide</code> turns that Prop into <code>true</code> or <code>false</code> by running its
+  <code>Decidable</code> instance, the kind of instance described above for
+  <code>ok2xx</code>.</li>
+</ul>
+
+<h2>Theorems are functions</h2>
+<p>Here's the theorem connecting those two:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Proofs/Decimal.lean:14-15">/-- Comparison is exactly rational `≤`. -/
+theorem Dec.le_iff (a b : Dec) : Dec.le a b = true ↔ a.val ≤ b.val := Dec.le_iff' a b</code></pre>
+<p>Read it as a function declaration, because that's literally what it is:</p>
+<ul>
+  <li>the <strong>name</strong> is <code>Dec.le_iff</code>;</li>
+  <li>the <strong>parameters</strong> are <code>(a b : Dec)</code>. Any two decimals: the parameters are
+  where "for all" comes from;</li>
+  <li>the <strong>return type</strong> is the statement: <code>Dec.le a b = true ↔ a.val ≤ b.val</code>,
+  "the code says ≤ if and only if the true rational values are ≤";</li>
+  <li>the <strong>body</strong>, after <code>:=</code>, is the proof. Here it's just a call to a helper
+  theorem <code>Dec.le_iff'</code> that does the real work.</li>
+</ul>
+<p>A proof of "A implies B" is a function that takes a proof of A and returns a proof of B. A
+<strong>hypothesis</strong> is just a parameter whose type is a statement. In the headline theorem
+from Lesson 1, <code>(h0 : exitCode argv w = 0)</code> is a parameter: you can only call the
+theorem if you can hand it evidence that the exit code was 0.</p>
+<p>So "the theorem is proved" means "this function type-checks". The type checker (the kernel)
+is the proof checker. (This correspondence between propositions and types, and proofs and
+programs, is called the <em>Curry–Howard correspondence</em>. You don't need the theory; you just
+need to know why a proof checker can look like a compiler.)</p>
+
+<h2><code>sorry</code>: the placeholder</h2>
+<p><code>sorry</code> closes any goal without proving it. The compiler accepts it with a warning.
+It's how you write a theorem's statement before its proof, the way you might write
+<code>throw std::logic_error("TODO")</code>. Anything built on <code>sorry</code> is marked as
+depending on the axiom <code>sorryAx</code>, which is how the audit finds it. In Stage 3, the
+subject of the next lesson, every proof in the repository was <code>sorry</code>.</p>
+
+<h2>Symbols in statements</h2>
+<div class="table-wrap"><table>
+<tr><th>Symbol</th><th>Read as</th><th>Symbol</th><th>Read as</th></tr>
+<tr><td><code>∀ x, P x</code></td><td>for every <var>x</var>, P holds</td><td><code>∃ x, P x</code></td><td>there is some <var>x</var> for which P holds</td></tr>
+<tr><td><code>A ∧ B</code></td><td>A and B</td><td><code>A ∨ B</code></td><td>A or B</td></tr>
+<tr><td><code>¬ A</code></td><td>not A</td><td><code>A → B</code></td><td>A implies B (also: function type)</td></tr>
+<tr><td><code>A ↔ B</code></td><td>A if and only if B</td><td><code>x ∈ xs</code></td><td><var>x</var> is an element of <var>xs</var></td></tr>
+<tr><td><code>h : P</code></td><td><code>h</code> is a proof of P</td><td><code>xs[i]</code></td><td>the <var>i</var>-th element (needs a proof that <var>i</var> is in range!)</td></tr>
+</table></div>
+
+<div class="box try"><span class="box-title">Try it</span>
+<p>Open <a data-gh="blob/stage-6/LakeLevel/Spec/Calendar.lean" href="../../LakeLevel/Spec/Calendar.lean"><code>LakeLevel/Spec/Calendar.lean</code></a>
+and read <code>leap</code>, <code>dim</code> and <code>ValidDate</code>. <code>leap</code> is a
+statement, and <code>dim</code> uses it in an <code>if</code>. Find the line that makes that
+allowed.</p>
+</div>
+
+<nav class="pager">
+  <a class="prev" href="05-reading-lean.html"><span class="label">← Previous</span>Reading Lean, part 1</a>
+  <a class="next" href="07-the-spec.html"><span class="label">Next →</span>The spec, in Lean</a>
+</nav>
+</main>
+</body>
+</html>

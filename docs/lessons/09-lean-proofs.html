@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading Lean, part 3: proofs and smaller syntax</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 9</p>
+<h1>Reading Lean, part 3: proofs and smaller syntax</h1>
+<p class="lede">The last of three lessons on reading Lean. It covers tactic proofs, which
+Lessons 10 and 11 take apart, and collects the smaller pieces of syntax that the rest of the
+lessons use.</p>
+
+<p>This lesson builds on <a href="05-reading-lean.html">Lesson 5</a> (functions and data) and
+<a href="06-lean-statements.html">Lesson 6</a> (statements and theorems).</p>
+
+<h2 id="tactics">Tactics: writing a proof interactively</h2>
+<p>Writing out a whole proof by hand, as a term, gets tedious quickly. Instead, most proofs are
+written in <strong>tactic mode</strong>, entered with <code>by</code>. You see the current
+<strong>goal</strong> (what's left to prove), and each tactic transforms it, until nothing is
+left. It's like a debugger session where you step a proof instead of a program.</p>
+<p>Here's a theorem about <code>select</code>, the function from Lesson 5 that picks the latest
+reading from a list:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Proofs/Select.lean:116-118">/-- … and only fails on an empty list. -/
+theorem select_none_iff (rs : List Reading) : select rs = none ↔ rs = [] := by
+  cases rs &lt;;&gt; simp [select]</code></pre>
+<p>This is what Lean shows you (in an editor, it appears in a side panel as you move the cursor).
+At the start, above the line are the things you have; below <code>⊢</code> is what you must prove:</p>
+<pre class="output"><code class="goal">rs : List Reading
+⊢ select rs = none ↔ rs = []</code></pre>
+<p><code>cases rs</code> splits on the two shapes a list can have, leaving two goals:</p>
+<pre class="output"><code class="goal">case nil
+⊢ select [] = none ↔ [] = []
+
+case cons
+head✝ : Reading
+tail✝ : List Reading
+⊢ select (head✝ :: tail✝) = none ↔ head✝ :: tail✝ = []</code></pre>
+<p><code>&lt;;&gt;</code> means "then run the next tactic on every resulting goal".
+<code>simp [select]</code> unfolds the definition of <code>select</code> and simplifies: in the first
+case both sides are true; in the second, both sides are false (<code>some …</code> is never
+<code>none</code>, and a non-empty list is never <code>[]</code>). No goals remain, so the proof is
+done. (The <code>✝</code> marks names Lean made up, which you can't refer to.)</p>
+
+<p>The tactics you'll see most in this repository:</p>
+<div class="table-wrap"><table>
+<tr><th>Tactic</th><th>What it does</th></tr>
+<tr><td><code>intro h</code></td><td>to prove "A → B", assume A (call it <code>h</code>) and prove B</td></tr>
+<tr><td><code>exact e</code></td><td>"here is exactly the thing you asked for"</td></tr>
+<tr><td><code>cases x</code> / <code>rcases</code> / <code>obtain ⟨a, b⟩ := h</code></td><td>split into one goal per shape of <code>x</code>; take apart an "and" or "exists"</td></tr>
+<tr><td><code>by_cases h : P</code></td><td>two goals: one where P is true, one where it's false</td></tr>
+<tr><td><code>induction</code></td><td>prove it for the empty case and for "one more", like a recursive function</td></tr>
+<tr><td><code>unfold f</code> / <code>simp [f]</code></td><td>replace <code>f</code> by its definition / rewrite and simplify with known facts; <code>simp only [f, g]</code> uses the listed facts and nothing else</td></tr>
+<tr><td><code>rw [h]</code></td><td>rewrite using an equation <code>h : a = b</code>: replace <code>a</code> by <code>b</code></td></tr>
+<tr><td><code>… at h</code></td><td>added to <code>unfold</code>, <code>simp</code> or <code>rw</code>: work on the hypothesis <code>h</code> instead of the goal</td></tr>
+<tr><td><code>have h : P := proof</code></td><td>prove <code>P</code> on the spot and add it to the hypotheses as <code>h</code>; without a name it's called <code>this</code></td></tr>
+<tr><td><code>subst h</code></td><td>given <code>h : x = e</code> for a variable <code>x</code>, replace <code>x</code> by <code>e</code> everywhere</td></tr>
+<tr><td><code>omega</code></td><td>a decision procedure: proves any true linear-arithmetic fact about integers (with <code>+</code>, <code>*</code> by constants, <code>/</code> and <code>%</code> by constants)</td></tr>
+<tr><td><code>decide</code></td><td>evaluates a statement that's decidable and finite, and checks it's true</td></tr>
+<tr><td><code>refine ⟨?_, ?_⟩</code></td><td>"I'll build this pair; give me a goal for each hole"</td></tr>
+<tr><td><code>constructor</code></td><td>split an "and" or "if and only if" into its parts</td></tr>
+</table></div>
+
+<h2 id="syntax">Smaller pieces of syntax</h2>
+<p>The rest of the lessons also use these:</p>
+<div class="table-wrap"><table>
+<tr><th>Syntax</th><th>Meaning</th><th>Rough C++ equivalent</th></tr>
+<tr><td><code>let x := e</code></td><td>name a value; <code>let (a, b) := e</code> takes a pair apart</td><td><code>auto x = e;</code> / <code>auto [a, b] = e;</code></td></tr>
+<tr><td><code>f _</code></td><td>an argument Lean works out by itself from the types</td><td>template argument deduction</td></tr>
+<tr><td><code>{a b : Nat}</code> in a signature</td><td><em>implicit</em> parameters: callers don't pass them, Lean works them out from the other arguments. <code>(a := e)</code> passes one by name anyway.</td><td>deduced template parameters</td></tr>
+<tr><td><code>e |&gt;.f</code></td><td><code>(e).f</code>, so a chain of calls reads left to right</td><td>method chaining</td></tr>
+<tr><td><code>(· ≠ "")</code></td><td>a short lambda, <code>fun s =&gt; s ≠ ""</code>: the <code>·</code> is its argument</td><td><code>[](auto s) { return s != ""; }</code></td></tr>
+<tr><td><code>s!"HTTP {st}"</code></td><td>string interpolation</td><td><code>std::format("HTTP {}", st)</code></td></tr>
+<tr><td><code>{ get := e, now := t }</code></td><td>a structure value, with fields named</td><td>designated initializers: <code>{ .get = e, .now = t }</code></td></tr>
+<tr><td><code>Unit</code>, <code>()</code></td><td>the type with exactly one value, <code>()</code>, for results that carry no information</td><td><code>void</code>; so <code>Except String Unit</code> is <code>std::expected&lt;void, std::string&gt;</code></td></tr>
+</table></div>
+
+<h2>Symbols in proofs</h2>
+<div class="table-wrap"><table>
+<tr><th>Symbol</th><th>Read as</th><th>Symbol</th><th>Read as</th></tr>
+<tr><td><code>⊢ G</code></td><td>the goal still to prove is G</td><td><code>&lt;;&gt;</code></td><td>apply the next tactic to every goal</td></tr>
+<tr><td><code>·</code></td><td>at the start of a line: one bullet per goal; inside parentheses: a short lambda's argument</td><td><code>x✝</code></td><td>a name Lean made up, which you can't refer to</td></tr>
+</table></div>
+<p>The symbols used in statements, such as <code>∀</code> and <code>↔</code>, are in the table at the
+end of <a href="06-lean-statements.html">Lesson 6</a>.</p>
+
+<div class="box try"><span class="box-title">Try it</span>
+<p>Open <a data-gh="blob/stage-6/LakeLevel/Proofs/Select.lean" href="../../LakeLevel/Proofs/Select.lean"><code>LakeLevel/Proofs/Select.lean</code></a>
+and find <code>select_none_iff</code>. Read the theorem statements around it and say in English
+what each one claims, without reading the proofs. If you want to go further than reading, the
+free books
+<a href="https://lean-lang.org/functional_programming_in_lean/">Functional Programming in Lean</a>
+and <a href="https://lean-lang.org/theorem_proving_in_lean4/">Theorem Proving in Lean 4</a> are
+the standard introductions.</p>
+</div>
+
+<nav class="pager">
+  <a class="prev" href="08-implementation.html"><span class="label">← Previous</span>An implementation that passes its tests</a>
+  <a class="next" href="10-reading-a-proof.html"><span class="label">Next →</span>Anatomy of a proof</a>
+</nav>
+</main>
+</body>
+</html>

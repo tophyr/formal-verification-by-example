@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Requirements and Ambiguities</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 3 · Stage 1</p>
+<h1>Requirements: what the prose left unspecified</h1>
+<p class="lede">Stage 1 takes each sentence of the PRD and tries to write a yes/no test for
+it. Each time that isn't possible, the PRD has left a question unanswered. This was the
+cheapest way of finding bugs in the whole project.</p>
+
+<div class="stage-links">
+  <strong>Stage 1</strong>
+  <a data-gh="commit/33d8858">commit 33d8858</a>
+  <a data-gh="compare/stage-0...stage-1">what changed since stage-0</a>
+  <a data-gh="blob/stage-1/docs/01-requirements.md" href="../../docs/01-requirements.md">docs/01-requirements.md</a>
+</div>
+
+<h2>The method</h2>
+<p>The method is mechanical:</p>
+<ol>
+  <li><strong>Atomize.</strong> Split every sentence into claims that are individually true or
+  false. "Print the site name, the level to two decimal places, when it was observed and how
+  long ago that was" is at least four requirements.</li>
+  <li><strong>Try to write the test.</strong> For each claim, write down an exact input and the
+  exact expected output. When you can't, because the prose doesn't say, you've found an
+  <strong>ambiguity</strong>.</li>
+  <li><strong>Decide, and write the decision down.</strong> Every ambiguity gets a resolution
+  and a reason. By the end of this stage, no question is left open.</li>
+  <li><strong>Tag how each requirement will be checked.</strong> This is the first point at
+  which anyone asks "which parts can we actually prove?"</li>
+</ol>
+<p>The output is <a data-gh="blob/stage-1/docs/01-requirements.md" href="../../docs/01-requirements.md"><code>docs/01-requirements.md</code></a>:
+an <em>ambiguity register</em> (A1–A21) and a numbered requirements list (R1–R71).</p>
+
+<h2>Checking claims against the original by running it</h2>
+<p>Wherever the PRD was ambiguous, the register records what the Python original actually
+did. Each of those claims was checked by running Python, not by reading the code. Here are
+four of the findings.</p>
+
+<h3>Finding 1: <code>--threshold nan</code> silently disables alerting</h3>
+<p>The original declares the option like this:</p>
+<pre><code>p.add_argument("--threshold", type=float,</code></pre>
+<p>and decides to alert with:</p>
+<pre><code>if args.threshold is not None and level >= args.threshold:</code></pre>
+<p>Python's <code>float()</code> accepts the string <code>"nan"</code>. And every comparison
+with NaN is false:</p>
+<pre class="output fail"><code>$ python3 -c 'x = float("nan"); print(677.58 >= x, 700 >= x)'
+False False</code></pre>
+<p>So <code>lake-level --threshold nan</code> runs, prints the report, never alerts, and exits 0,
+on every run.
+A typo in a cron job could produce exactly this. It's a direct violation of the PRD's "never
+silently fail to alert", and no amount of testing the alert path with sensible thresholds
+would find it. It was found by asking "what is a valid threshold?" and trying to write the
+answer down.</p>
+<p><strong>Decision (A6):</strong> a threshold is exactly <code>-?[0-9]+(\.[0-9]+)?</code>.
+Anything else is a usage error. (<code>float()</code> also accepts <code>inf</code>,
+<code>1e3</code>, <code>" 685 "</code> and <code>6_85</code>; all now rejected.)</p>
+
+<h3>Finding 2: "most recent" compared timestamp <em>strings</em></h3>
+<pre><code>return max(records, key=lambda r: r["dateTime"])</code></pre>
+<p>That compares the text, alphabetically. It gives the right answer only as long as every
+timestamp has the same format and the same time zone. It works today because the API happens to
+send them all in UTC with a <code>Z</code>. But:</p>
+<pre class="output fail"><code>$ python3 -c 'print(max(["2026-10-20T04:00:00-05:00", "2026-10-20T08:00:00Z"]))'
+2026-10-20T08:00:00Z</code></pre>
+<p><code>04:00-05:00</code> is 09:00 UTC, the later moment, but it loses. <strong>Decision
+(A1):</strong> order readings by the instant they denote. Among readings tied for the latest
+instant, pick the first in the list. (A2 then accepts only the canonical UTC format, so the
+string-order bug can't come back.)</p>
+
+<h3>Finding 3: user input pasted into URLs</h3>
+<p><code>--site</code>, <code>--type</code> and <code>--ntfy-topic</code> were pasted into URLs
+unchecked. <code>--site '3963?x=1'</code> changes the query string; <code>--ntfy-topic a/b</code>
+posts somewhere else. <strong>Decision (A17):</strong> site is <code>[0-9]{1,9}</code>, type is
+<code>[a-z]{1,32}</code>, topic is ntfy's own topic rule, <code>[-_A-Za-z0-9]{1,64}</code> (which
+was checked against ntfy's server source, not guessed).</p>
+
+<h3>Finding 4: corrupt older records are never read</h3>
+<p>The original reads <code>value1</code> and parses the timestamp only for the newest record. A
+<code>null</code> or missing <code>value1</code> there crashes it with a traceback. The same defect
+in any other record is never looked at: the original prints its report, sends an alert if the level
+is high, and exits 0 without mentioning the corrupt data. <strong>Decision (A7):</strong> if any
+record is malformed, the whole response is rejected with an error.</p>
+
+<h3>And a smaller one: binary floating point</h3>
+<pre class="output"><code>$ python3 -c 'print(f"{2.675:.2f}", f"{0.125:.2f}", "%.20f" % 677.58)'
+2.67 0.12 677.58000000000004092726</code></pre>
+<p>The PRD says "never report a wrong level", but a binary <code>double</code> can't even hold
+677.58. <strong>Decisions A3 and A4:</strong> levels are exact decimals (the rational number
+written in the JSON), and rounding is to the nearest, ties away from zero. So 2.675 becomes 2.68.</p>
+
+<div class="box cpp"><span class="box-title">C++ analogy</span>
+<p>All of these are "the default did something reasonable-looking". <code>std::stod("nan")</code>
+also succeeds; <code>std::max</code> on <code>std::string</code> also compares text;
+<code>printf("%.2f", 2.675)</code> also prints <code>2.67</code>. Nothing here is specific to
+Python. The bugs come from never having written down what the right answer is.</p>
+</div>
+
+<h2>Writing requirements a stranger could check</h2>
+<p>After the register, the requirements are written so that a stranger, given one run of the
+program, could say whether it complied. Two examples, verbatim:</p>
+<blockquote><p><strong>R50</strong> An alert shall be attempted <strong>if and only if</strong> a
+threshold was given, the response is valid, and <code>level ≥ threshold</code> exactly.</p></blockquote>
+<blockquote><p><strong>R62</strong> If the run is not a success, the exit status shall be non-zero.
+In particular, there shall be no outcome in which a threshold was given, the level was ≥
+threshold, no alert was delivered, and the exit status is 0.</p></blockquote>
+<p>Notice "if and only if" in R50. The PRD only said when to alert. It didn't say "and never
+otherwise", which is just as important: an alarm that fires all the time is useless.</p>
+
+<h2>Tagging: which parts can be proved?</h2>
+<p>Each requirement gets a tag saying how it will be checked:</p>
+<div class="table-wrap"><table>
+<tr><th>Tag</th><th>Meaning</th><th>Examples</th></tr>
+<tr><td><strong>P</strong>roved</td><td>a machine-checked theorem over all inputs</td><td>rounding, calendar, alert decision, exit codes</td></tr>
+<tr><td><strong>T</strong>ested</td><td>specific runs checked automatically</td><td>the 30 s timeout, run time under 5 s</td></tr>
+<tr><td><strong>I</strong>nspected</td><td>a human reads a small piece of trusted code</td><td>"the request we built is the one actually sent"</td></tr>
+<tr><td><strong>A</strong>ssumed</td><td>relied on, not checked; written down</td><td>the JSON parser, the time-zone database, the clock</td></tr>
+</table></div>
+<p>The tags already shape the architecture. Most requirements are <strong>P</strong>, so
+they must live in code with no I/O at all, because you can't prove things about a network.
+The <strong>I</strong> items must live in code small enough to read in one sitting. That's
+<a href="04-the-model.html">Lesson 4</a>'s "functional core, imperative shell".</p>
+
+<div class="box try"><span class="box-title">Try it</span>
+<p>Take a feature spec from your own work, a ticket or a design doc. Pick one paragraph and
+do steps 1–3 on it. Count the ambiguities. Then check what your code actually does for each
+one by running it, not by reading it.</p>
+</div>
+
+<nav class="pager">
+  <a class="prev" href="02-the-prd.html"><span class="label">← Previous</span>The program and its PRD</a>
+  <a class="next" href="04-the-model.html"><span class="label">Next →</span>The model</a>
+</nav>
+</main>
+</body>
+</html>

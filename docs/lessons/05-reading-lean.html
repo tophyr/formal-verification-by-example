@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading Lean, part 1: functions and data</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 5</p>
+<h1>Reading Lean, part 1: functions and data</h1>
+<p class="lede">The first of three lessons on reading Lean 4, the language every file in this
+repository is written in. This one covers what every file is built from: functions, data types
+and pattern matching.</p>
+
+<p>Lean 4 is two things at once: a functional programming language that compiles to native
+code, and a proof assistant. This lesson covers the programming language.
+<a href="06-lean-statements.html">Lesson 6</a> covers statements and theorems, just before the
+spec needs them, and <a href="09-lean-proofs.html">Lesson 9</a> covers proofs, just before the
+first proof is taken apart. Every example is real code from the repository at
+<code>stage-6</code>, and the caption on each one links to it.</p>
+
+<h2>A first function</h2>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Impl/Render.lean:65-66">/-- `Error: {m}\n` (R60). Callers pass `sanitize`d text. -/
+def errLine (m : String) : String := "Error: " ++ m ++ "\n"</code></pre>
+<p>Reading it:</p>
+<ul>
+  <li><code>/-- … -/</code> is a doc comment, attached to the definition after it.
+  <code>--</code> starts a line comment.</li>
+  <li><code>def errLine</code> defines a function named <code>errLine</code>.</li>
+  <li><code>(m : String)</code> is its one parameter: the name first, then a colon, then the
+  type.</li>
+  <li>The <code>: String</code> after the parameters is the result type.</li>
+  <li><code>:=</code> means "is defined as". What follows is the body.</li>
+  <li>The body is a single expression, and its value is the result; there's no
+  <code>return</code>. <code>++</code> joins two strings (or two lists).</li>
+</ul>
+<p>In C++:</p>
+<pre><code>std::string errLine(std::string const&amp; m) { return "Error: " + m + "\n"; }</code></pre>
+<p>A call has no parentheses or commas: the function is followed by its arguments, separated by
+spaces. <code>errLine "no records"</code> is <code>"Error: no records\n"</code>. Parentheses are
+only for grouping. The program calls <code>errLine (sanitize m)</code>, where
+<code>(sanitize m)</code> is one argument; without the parentheses, Lean would read it as
+<code>errLine</code> applied to two arguments, <code>sanitize</code> and <code>m</code>.</p>
+
+<h3>Conditions</h3>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Impl/Decimal.lean:20-20">def sgn (neg : Bool) : Int := if neg then -1 else 1</code></pre>
+<p><code>if … then … else …</code> is an expression with a value, like C++'s <code>?:</code>, so
+<code>sgn true</code> is −1 and <code>sgn false</code> is 1. Since it must have a value either
+way, the <code>else</code> can't be left out.</p>
+
+<h3>Several parameters</h3>
+<p>A function with several parameters lists them one after another. Parameters of the same type
+can share one pair of parentheses, so <code>(y mo d : Nat)</code> is three parameters, all of type
+<code>Nat</code>: a natural number, 0, 1, 2, and so on.</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Spec/Calendar.lean:36-40">/-- "Tomorrow": the obvious successor of a date. -/
+def nextDate (y mo d : Nat) : Nat × Nat × Nat :=
+  if d &lt; dim y mo then (y, mo, d + 1)
+  else if mo &lt; 12 then (y, mo + 1, 1)
+  else (y + 1, 1, 1)</code></pre>
+<ul>
+  <li>The result type <code>Nat × Nat × Nat</code> is a triple of natural numbers, and
+  <code>(y, mo, d + 1)</code> is a value of that type.</li>
+  <li><code>dim y mo</code> calls another function, <code>dim</code> (the number of days in month
+  <code>mo</code> of year <code>y</code>), with two arguments.</li>
+  <li><code>else if</code> chains work as in C++.</li>
+  <li>Written with arrows, <code>nextDate</code>'s type is
+  <code>Nat → Nat → Nat → Nat × Nat × Nat</code>: one arrow per parameter, and the last type is
+  the result. Lean shows types this way in its messages, and <a href="07-the-spec.html">Lesson 7</a>
+  uses it for a function passed as an argument.</li>
+</ul>
+<p>In C++:</p>
+<pre><code>std::tuple&lt;unsigned, unsigned, unsigned&gt; nextDate(unsigned y, unsigned mo, unsigned d) {
+  if (d &lt; dim(y, mo)) return {y, mo, d + 1};
+  else if (mo &lt; 12) return {y, mo + 1, 1};
+  else return {y + 1, 1, 1};
+}</code></pre>
+
+<h2>Data: <code>structure</code> and <code>inductive</code></h2>
+<p>A <code>structure</code> is a <code>struct</code>:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Types.lean:10-15">/-- An exact decimal `m / 10^e`. Deliberately the same shape as Lean's
+`JsonNumber`, so JSON numbers convert without rounding (A3, R16). -/
+structure Dec where
+  m : Int
+  e : Nat
+  deriving Repr, DecidableEq, Inhabited</code></pre>
+<p><code>deriving</code> asks the compiler to generate code: <code>Repr</code> is printing,
+<code>DecidableEq</code> is <code>operator==</code>, <code>Inhabited</code> is a default value.</p>
+<p><code>Int</code> is the integers (…, −2, −1, 0, 1, 2, …), and <code>Nat</code> is the natural
+numbers (0, 1, 2, …): whole numbers that can't be negative. Neither has fractions; that's
+<code>Rat</code>, in the table below. So <code>m</code> can be negative (−1.25 is
+<code>⟨-125, 2⟩</code>), but <code>e</code>, the number of decimal places, can't, and the type says
+so: nothing has to check or prove that <code>e</code> is at least 0. Both are <strong>arbitrary
+precision</strong>. There's no overflow anywhere in this project, which removes a whole class of
+things to prove.</p>
+<p>An <code>inductive</code> type is a tagged union, like <code>std::variant</code> with named
+alternatives that each carry their own fields:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Types.lean:79-83">/-- What the world answers to a GET. -/
+inductive GetResult where
+  | response (status : Nat) (body : String)
+  | failed (msg : String)
+  deriving Repr, DecidableEq</code></pre>
+<p>Each line starting with <code>|</code> is one alternative, called a <em>constructor</em>. The
+fields after a constructor's name are written like a function's parameters, each as
+<code>(name : Type)</code>. So <code>response</code> carries two fields, a <code>status</code> that
+is a <code>Nat</code> and a <code>body</code> that is a <code>String</code>, while
+<code>failed</code> carries one, a <code>msg</code>. In C++ terms, <code>response</code> is roughly
+a struct <code>{ unsigned status; std::string body; }</code>, and a <code>GetResult</code> holds
+either a <code>response</code> or a <code>failed</code>. Building a value looks like a function
+call: <code>.response 200 "…"</code> is a <code>GetResult</code> with status 200 and that
+body.</p>
+<p>Lean's standard library defines more types the same way. <code>Option</code>, <code>Except</code>
+and <code>List</code> are themselves <code>inductive</code> types, and <code>Array</code>, pairs and
+<code>Rat</code> are <code>structure</code>s. You'll see them as the types of fields, arguments and
+results. In this table, <code>α</code>, <code>β</code> and <code>ε</code> stand for any type, like
+<code>T</code> in a C++ template:</p>
+<div class="table-wrap"><table>
+<tr><th>Type</th><th>Its values</th><th>Rough C++ equivalent</th></tr>
+<tr><td><code>Option α</code></td><td><code>some x</code>, or <code>none</code></td><td><code>std::optional&lt;α&gt;</code></td></tr>
+<tr><td><code>Except ε α</code></td><td><code>.ok x</code>, or <code>.error e</code></td><td><code>std::expected&lt;α, ε&gt;</code></td></tr>
+<tr><td><code>List α</code></td><td><code>[a, b, c]</code>; <code>x :: xs</code> is <code>x</code> in front of the list <code>xs</code></td><td>an immutable singly linked list</td></tr>
+<tr><td><code>Array α</code></td><td><code>#[a, b, c]</code></td><td><code>std::vector&lt;α&gt;</code></td></tr>
+<tr><td><code>α × β</code></td><td><code>(a, b)</code>; for a pair <code>p</code>, <code>p.1</code> and <code>p.2</code> are its parts</td><td><code>std::pair&lt;α, β&gt;</code>, with <code>.first</code> and <code>.second</code></td></tr>
+<tr><td><code>Rat</code></td><td>exact fractions</td><td>no standard equivalent</td></tr>
+</table></div>
+<p>Two more pieces of syntax build values:</p>
+<div class="table-wrap"><table>
+<tr><th>Syntax</th><th>Meaning</th><th>Rough C++ equivalent</th></tr>
+<tr><td><code>⟨a, b⟩</code></td><td>the type's constructor applied to <code>a</code> and <code>b</code>, when the type has only one constructor (a <code>Dec</code>, for example)</td><td>brace-initialization: <code>Dec{a, b}</code></td></tr>
+<tr><td><code>.ok x</code></td><td>the constructor <code>ok</code> of whatever type is expected here</td><td>like writing an enum value without naming its type</td></tr>
+</table></div>
+
+<h2>Taking values apart: <code>match</code></h2>
+<p><code>alertNotice</code> is the note printed after an alert is delivered.
+<code>cfg.threshold</code> is an <code>Option Threshold</code>: the threshold given on the command
+line, if there was one.</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Impl/Render.lean:68-72">/-- The stderr note after a delivered alert (R53). -/
+def alertNotice (cfg : Cfg) : String :=
+  match cfg.threshold with
+  | some th =&gt; "  ALERT: level &gt;= " ++ th.text ++ " ft -&gt; notified ntfy.sh/" ++ cfg.topic ++ "\n"
+  | none =&gt; ""</code></pre>
+<ul>
+  <li><code>match cfg.threshold with</code> and the <code>|</code> lines below it are
+  <strong>pattern matching</strong>: one line for each shape the value can have, with
+  <code>=&gt;</code> before that case's result. If there's a threshold, <code>some th</code>
+  matches and names it <code>th</code>; if not, <code>none</code> matches.</li>
+  <li>The compiler rejects a <code>match</code> that leaves a case out.</li>
+  <li><code>cfg.threshold</code>, <code>th.text</code> and <code>cfg.topic</code> read fields of
+  structures, as in C++.</li>
+</ul>
+<p>In C++:</p>
+<pre><code>std::string alertNotice(Cfg const&amp; cfg) {
+  if (!cfg.threshold) return "";
+  return "  ALERT: level &gt;= " + cfg.threshold-&gt;text + " ft -&gt; notified ntfy.sh/" + cfg.topic + "\n";
+}</code></pre>
+
+<h3>Lists, lambdas and dot calls</h3>
+<p>Patterns can also take a list apart. <code>select</code> picks the latest reading from a
+list:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Impl/Select.lean:7-11">/-- Keep the first reading seen with the latest instant: replace only on *strictly* later. -/
+def select (rs : List Reading) : Option Reading :=
+  match rs with
+  | [] =&gt; none
+  | r :: rest =&gt; some (rest.foldl (fun best x =&gt; if best.t &lt; x.t then x else best) r)</code></pre>
+<ul>
+  <li><code>[]</code> matches the empty list, which gives <code>none</code>. <code>r :: rest</code>
+  matches a list with first element <code>r</code> and the rest <code>rest</code>, which gives
+  <code>some (…)</code>.</li>
+  <li><code>rest.foldl f r</code> is <code>std::accumulate(rest.begin(), rest.end(), r, f)</code>.
+  The dot works like a member call: <code>rest</code> is a <code>List</code>, so
+  <code>rest.foldl f r</code> calls the function <code>List.foldl</code> with <code>rest</code> as its
+  list argument. By the same rule, <code>k.run w</code> in later lessons is
+  <code>Prog.run k w</code> when <code>k</code> is a <code>Prog</code>.</li>
+  <li><code>fun best x =&gt; …</code> is a lambda: <code>[](auto best, auto x) { … }</code>.</li>
+</ul>
+<p>In C++:</p>
+<pre><code>std::optional&lt;Reading&gt; select(std::list&lt;Reading&gt; const&amp; rs) {
+  if (rs.empty()) return std::nullopt;
+  return std::accumulate(std::next(rs.begin()), rs.end(), rs.front(),
+      [](Reading const&amp; best, Reading const&amp; x) { return best.t &lt; x.t ? x : best; });
+}</code></pre>
+
+<h2>Pure, and total</h2>
+<p>Lean functions can't mutate anything or do I/O (except inside the <code>IO</code> type, which
+only <code>Main.lean</code> uses). They also have to be <strong>total</strong>: every case handled,
+and every call guaranteed to terminate. The compiler checks both. Code that can't be shown to
+terminate must be marked <code>partial</code>, and then you can't prove anything about it. In this
+repository exactly one function is <code>partial</code>: the shell's interpreter loop in
+<a data-gh="blob/stage-6/Main.lean#L71" href="../../Main.lean"><code>Main.lean</code></a>,
+which is outside the proofs anyway.</p>
+<p>You'll also see <code>do</code> blocks with <code>←</code> and <code>let</code>. They look
+imperative, but they're syntax for chaining <code>Option</code>/<code>Except</code> steps:
+<code>let x ← step</code> means "run <code>step</code>; if it failed, return the failure now;
+otherwise call the result <code>x</code>". It's like a chain of early returns on
+<code>std::expected</code>. Written inside an expression, <code>(← step)</code> does the same
+thing without naming the result. Inside a <code>do</code> block, <code>pure x</code> succeeds with
+<code>x</code> (like <code>return x</code>), and in an <code>Except</code> block, <code>throw e</code>
+fails with <code>e</code>.</p>
+
+<div class="box try"><span class="box-title">Try it</span>
+<p>Open <a data-gh="blob/stage-6/LakeLevel/Impl/Calendar.lean" href="../../LakeLevel/Impl/Calendar.lean"><code>LakeLevel/Impl/Calendar.lean</code></a>
+and read <code>digit?</code> and <code>hour12</code>. You should be able to tell, with no help,
+that the first turns a digit character into its value (or <code>none</code>), and the second turns
+a 24-hour hour into a 12-hour one with AM or PM.</p>
+</div>
+
+<nav class="pager">
+  <a class="prev" href="04-the-model.html"><span class="label">← Previous</span>The model</a>
+  <a class="next" href="06-lean-statements.html"><span class="label">Next →</span>Reading Lean, part 2</a>
+</nav>
+</main>
+</body>
+</html>

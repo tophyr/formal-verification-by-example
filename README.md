@@ -21,8 +21,8 @@ git log --oneline --decorate
 | 1 | [`docs/01-requirements.md`](docs/01-requirements.md) | *Exactly what, testably? What did the prose leave unspecified?* |
 | 2 | [`docs/02-formal-model.md`](docs/02-formal-model.md) | *What are the mathematical objects and functions?* |
 | 3 | [`docs/03-lean-spec.md`](docs/03-lean-spec.md), `LakeLevel/{Spec,Impl,Proofs}/` | *Can a machine type-check the spec?* |
-| **4** | [`docs/04-implementation.md`](docs/04-implementation.md), `LakeLevel/Impl/`, `test/` | *Does an implementation exist, and does it pass examples?* |
-| 5 | `LakeLevel/Proofs/*.lean` | *Does the implementation meet the spec for **all** inputs?* |
+| 4 | [`docs/04-implementation.md`](docs/04-implementation.md), `LakeLevel/Impl/`, `test/` | *Does an implementation exist, and does it pass examples?* |
+| **5** | [`docs/05-proofs.md`](docs/05-proofs.md), `LakeLevel/Proofs/` | *Does the implementation meet the spec for **all** inputs?* |
 | 6 | `Main.lean`, `test/` | *What's left unproven, and how do we cover it?* |
 
 ## Building
@@ -35,15 +35,17 @@ lake build                          # type-check everything, run the tests
 lake env lean scripts/Audit.lean    # which theorems are actually proved?
 ```
 
-## Current stage: 4, implemented and tested, nothing proved
-
-Every function now has a real body, and `test/Tests.lean` checks them
-against the PRD's examples, GNU `date`, and doctored copies of real API
-responses. The tests were themselves checked by planting four bugs, and all
-four were caught. The audit still shows no proofs:
+## Current stage: 5, every obligation proved
 
 ```
-theorems proved from standard axioms only: 0
-theorems still depending on sorry: 48
+$ lake env lean scripts/Audit.lean
+theorems proved from standard axioms only: 139 (obligations + helper lemmas)
+obligations (scripts/obligations.txt) fully proved: 48/48
+theorems still depending on sorry: 0
 definitions still depending on sorry: 0
 ```
+
+These include, for every possible network response, clock, time zone and
+ntfy outcome, the guarantee that **it never exits 0 after failing to deliver
+a required alert** (`never_silently_fails`). Seven planted bugs each broke a
+proof, and one of them got past the whole Stage 4 test suite.

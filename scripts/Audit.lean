@@ -51,11 +51,27 @@ elab "#audit" : command => do
     | .defnInfo _ =>
       if axs.contains ``sorryAx then sorriedDefs := sorriedDefs.push n
     | _ => pure ()
-  logInfo m!"theorems proved from standard axioms only: {proved}"
+  logInfo m!"theorems proved from standard axioms only: {proved} (obligations + helper lemmas)"
+  -- The obligations are frozen in scripts/obligations.txt (generated from tag stage-3).
+  -- Each must still exist, still be a theorem, and be fully proved: deleting or
+  -- weakening-by-removal a hard theorem cannot turn the audit green.
+  let names := (← IO.FS.lines "scripts/obligations.txt").filter (· ≠ "")
+  let mut missing : Array String := #[]
+  let mut obligationsProved : Nat := 0
+  for s in names do
+    let n := s.toName
+    match env.find? n with
+    | some (.thmInfo _) =>
+      let axs ← liftCoreM (collectAxioms n)
+      if axs.all (standardAxioms.contains ·) then obligationsProved := obligationsProved + 1
+    | _ => missing := missing.push s
+  logInfo m!"obligations (scripts/obligations.txt) fully proved: {obligationsProved}/{names.size}"
+  unless missing.isEmpty do logInfo m!"OBLIGATIONS MISSING: {missing.toList}"
   logInfo m!"theorems still depending on sorry: {unproved.size}{if unproved.isEmpty then m!"" else m!"\n  " ++ m!"{unproved.toList}"}"
   logInfo m!"definitions still depending on sorry: {sorriedDefs.size}{if sorriedDefs.isEmpty then m!"" else m!"\n  " ++ m!"{sorriedDefs.toList}"}"
   unless suspicious.isEmpty do logInfo m!"NON-STANDARD AXIOMS: {suspicious.toList}"
-  if !unproved.isEmpty || !suspicious.isEmpty || !sorriedDefs.isEmpty then
+  if !unproved.isEmpty || !suspicious.isEmpty || !sorriedDefs.isEmpty || !missing.isEmpty ||
+      obligationsProved != names.size then
     throwError "audit failed"
 
 #audit

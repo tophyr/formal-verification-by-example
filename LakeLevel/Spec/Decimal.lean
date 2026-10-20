@@ -48,8 +48,8 @@ def DecLit (s : String) (neg : Bool) (a b : List Char) : Prop :=
 def DecLit.den (neg : Bool) (a b : List Char) : Dec :=
   ⟨(if neg then -1 else 1) * (digitsVal (a ++ b) : Int), b.length⟩
 
-/-- The text shape `fixed n k` must have, for `n ≥ 1`:
-`-?(0|[1-9][0-9]*)\.[0-9]{n}`. -/
+/-- The text shape `fixed n k` must have: `-?(0|[1-9][0-9]*)\.[0-9]{n}`,
+or `-?(0|[1-9][0-9]*)` when `n = 0`. -/
 def FixedShape (n : Nat) (s : String) : Prop :=
   ∃ (neg : Bool) (a b : List Char),
     DecLit s neg a b ∧ b.length = n ∧ (a = ['0'] ∨ a.head? ≠ some '0')

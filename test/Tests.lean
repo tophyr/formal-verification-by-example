@@ -116,6 +116,9 @@ def check (label : String) (ok : Bool) : IO Unit :=
   check "first of the tied newest wins" (R.level == (⟨11111, 2⟩ : Dec))
   let .ok (S, _) ← decodes "no-full-no-name" | throw (IO.userError "no-full-no-name should decode")
   check "fallback name" (S.name == "site 3963" && S.full == none)
+  -- A10: siteNumber is optional. (Added after a proof caught a mutant these tests missed:
+  -- every fixture had a siteNumber, so "reject when absent" passed the whole suite.)
+  check "no siteNumber is fine" ((← decodes "no-site-number") matches .ok _)
 
 #eval do
   for name in ["unknown-site", "empty-records", "missing-value1", "null-value1",

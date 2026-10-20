@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Behind the Scenes</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 13</p>
+<h1>Behind the scenes: how this was actually built</h1>
+<p class="lede">This lesson describes how the repository was actually built: the order things
+really happened in, the dead ends, how the proofs were split across parallel workers, and the
+mistakes the checks caught. The work was less orderly than the stage commits make it look.</p>
+
+<h2>Who built it</h2>
+<p>This repository was built by an AI coding agent (Claude, working in Claude Code), directed by the
+repository's owner, who asked for a toy project to learn formal verification from: "start with an
+English-prose PRD … and formalize it progressively", in a language of the agent's choosing, "as
+formally verifiable as is realistically possible". The choice of Lean, the stages, and the
+techniques were the agent's. Everything below comes from that working session.</p>
+<p>That matters for how much you should trust it, and the answer is the same as for human-written
+proofs. You don't need to trust whoever wrote the proofs, because the kernel checks them
+(<a href="01-what-is-fv.html">Lesson 1</a>). You <em>do</em> need to read the theorem statements and
+the trusted base yourself, because nothing checks those for you.</p>
+
+<h2>A few working rules, set up front</h2>
+<p>The session ran under some standing rules that shaped a lot of what you've seen:</p>
+<ul>
+  <li><strong>Verify, never recall.</strong> Every claim about the original program's behavior was
+  checked by running it. Every claim on these pages about the binary, the generated C or the error
+  messages was re-run while writing them.</li>
+  <li><strong>Stubs must never agree with the thing under test.</strong> Hence the fixed-answer
+  <code>worldWith</code> in the tests, the fake curl pinned to a contract test, and expected values
+  from GNU <code>date</code> instead of from the code.</li>
+  <li><strong>Inject known-wrong values to prove a check can fire.</strong> Hence every mutation
+  table in <a href="10-planted-bugs.html">Lesson 10</a>.</li>
+  <li><strong>When a bug is found, sweep for its whole class.</strong> When one "zero calls" check
+  turned out to be vacuous, every negative assertion got a positive control.</li>
+  <li><strong>State plainly what a test can't cover.</strong> Hence "what is still not covered"
+  in <a href="12-shell-and-tcb.html">Lesson 12</a>.</li>
+  <li><strong>Confirm before outward-facing actions.</strong> Hence no real alert was ever sent to
+  ntfy.sh: that publishes to a public topic.</li>
+</ul>
+
+<h2>The real timeline</h2>
+
+<h3>Setup</h3>
+<p>Lean was installed with elan into the user's home directory, without editing their shell
+profile. The decision to use <strong>Lean core only, no Mathlib</strong> (Lean's large maths library)
+came early: the build takes seconds instead of a long first download and compile, and less code
+means a smaller trusted base. The cost showed up later, when several familiar tools turned out to
+be Mathlib-only.</p>
+
+<h3>Stages 0–2: documents, checked against reality</h3>
+<p>The PRD came first. For Stage 1, every ambiguity was checked against the original by running
+it: Python's <code>float("nan")</code>, argparse accepting <code>--thr</code> as an abbreviation, and
+so on. The live API was sampled too: 4,306 records, all in the same UTC format, and an unknown site
+number that returns HTTP 200 with an empty list rather than a 404. Stage 2's model was written in
+ordinary maths notation.</p>
+
+<h3>Stage 3: the spec meets the type checker</h3>
+<p>Writing the spec in Lean produced a series of small errors:</p>
+<ul class="compact">
+  <li><code>List.Forall₂</code> ("these two lists correspond element by element") is in Mathlib, not
+  core. <code>ValidResp</code> was rewritten with equal lengths plus a condition at each index, which
+  turned out to be clearer anyway.</li>
+  <li><code>{1,64}</code> inside a Lean <code>s!"…"</code> string was read as interpolation. Escaped as
+  <code>\{1,64}</code> (you can see it in <a data-gh="blob/stage-6/LakeLevel/Impl/Args.lean#L58" href="../../LakeLevel/Impl/Args.lean"><code>Impl/Args.lean</code></a>).</li>
+  <li>The audit's first draft reported "87 proved" with nothing proved
+  (<a href="06-the-spec.html">Lesson 6</a>). Fixed before the commit.</li>
+</ul>
+
+<h3>Stage 4: implementation and tests</h3>
+<p>Each implementation choice was made with the coming proofs in mind, especially the closed-form
+calendar. Before committing, four bugs were planted to show the tests could fail.</p>
+
+<h3>Stage 5: proofs, in parallel</h3>
+<p>Before handing anything out, the hardest technique was prototyped in a scratch file: inverting
+the calendar formula with "monotone plus 400 checked endpoints" (<a href="09-proof-techniques.html">Lesson 9</a>).
+Once that was known to work, the proofs were split across <strong>four parallel sub-agents</strong>,
+each in its own git worktree based on <code>stage-4</code>:</p>
+<div class="table-wrap"><table>
+<tr><th>Worker</th><th>Assignment</th></tr>
+<tr><td>1</td><td><code>Proofs/Decimal.lean</code>: 10 theorems (comparison, rounding, parsing, rendering)</td></tr>
+<tr><td>2</td><td><code>Proofs/Calendar.lean</code>: 8 theorems (day count, instants, timestamp parser, 12-hour clock)</td></tr>
+<tr><td>3</td><td><code>Proofs/Select.lean</code> and <code>Proofs/Decode.lean</code>: 5 theorems</td></tr>
+<tr><td>4</td><td><code>Proofs/Args.lean</code> and <code>Proofs/Render.lean</code>: 13 theorems</td></tr>
+<tr><td>main session</td><td><code>Proofs/Program.lean</code>: the whole-program theorems, including <code>never_silently_fails</code></td></tr>
+</table></div>
+<p>Each worker got the same rules. Here are three of them, from the calendar worker's
+instructions:</p>
+<pre class="output"><code>- Do NOT change theorem statements, anything in LakeLevel/Spec/, LakeLevel/Types.lean,
+  LakeLevel.lean, or other Proofs files. If a statement is false or unprovable as written,
+  stop on that theorem and report the exact counterexample/reason and a proposed minimal
+  fix — do not apply it.
+- You MAY restructure an Impl function in LakeLevel/Impl/Calendar.lean only if behavior is
+  unchanged and it's needed for provability; `lake build` (which runs test/Tests.lean) must
+  still pass, and you must list every such change in your report.
+- Forbidden: sorry, admit, native_decide, `decide +native`, new axioms, Mathlib/Batteries.</code></pre>
+<p>(Three of the rules, with lines re-wrapped for width. The last one goes on to list the tactics that
+<em>were</em> allowed, such as <code>decide +kernel</code> and <code>omega</code>.)
+The first rule is the important one. A worker under pressure to make a proof go through can weaken
+the statement until it's provable, and a weaker statement is a weaker guarantee. So
+statements were off limits to workers. Only the main session could change one, and only after
+reviewing the reason.</p>
+
+<h3>Merging the workers' results</h3>
+<p>Each worker reported back with a commit. The merges weren't automatic; each one was read:</p>
+<ul>
+  <li><strong>The decimal worker reported unused hypotheses</strong> (<code>1 ≤ n</code> on three
+  rendering theorems). As instructed, it didn't change the statements; it reported them. The main
+  session removed the hypotheses, which strengthened the theorems (<a href="09-proof-techniques.html">Lesson 9</a>).</li>
+  <li><strong>The args worker deleted theorem doc comments</strong> while restructuring its file.
+  They were restored from <code>stage-4</code>. Harmless for correctness, but doc comments are where
+  the theorems explain themselves to reviewers, so they matter.</li>
+  <li><strong>The decode worker refactored <code>decode</code></strong> into named steps. That was
+  permitted, since behavior was unchanged and the tests still passed (<a href="09-proof-techniques.html">Lesson 9</a>).</li>
+  <li>Two workers independently hit the <code>omega</code>-ignores-<code>Instant</code> surprise.</li>
+</ul>
+<p>Meanwhile the main session's own proofs hit their own snags. <code>split</code> wouldn't split an
+<code>if</code> buried inside a list, so it was replaced by an explicit <code>by_cases</code> on
+<code>cfg.json</code>. <code>::</code> binds tighter than <code>++</code>, so <code>a :: b ++ c</code>
+isn't what it looks like, and a rewrite lemma (<code>List.cons_append</code>) was needed. Some lemma names
+were deprecated (<code>if_true</code>, replaced by <code>ite_true</code>). And <code>tauto</code>, a standard tactic for propositional logic, is
+another Mathlib-only tool.</p>
+<p>Before the worker branches were deleted, each was confirmed, file by file, to be fully contained
+in the merged result.</p>
+
+<h3>Stages 5 and 6 overlapped, then were split</h3>
+<p>While the workers were proving theorems, the main session wrote the shell and the end-to-end tests.
+So for a while the working copy held both stages' changes at once. They were committed separately,
+so that each commit shows one stage. The <code>stage-5</code> commit used a <code>lakefile.toml</code> without the
+executable target, and left out the shell and its tests. Then each tag was checked out fresh and
+built from scratch, to show it stands on its own: <code>stage-5</code> builds and audits 48/48, and
+<code>stage-6</code> passes every check.</p>
+
+<h3>Stage 6: the checks find problems in the checks</h3>
+<ul>
+  <li>The e2e call counter's glob was wrong, making every "no POST" check vacuous. Found by a
+  positive control (<a href="10-planted-bugs.html">Lesson 10</a>).</li>
+  <li>The curl contract test's own harness had a bug capturing exit codes, because curl's output
+  with these flags has no trailing newline. It was caught because the check failed on behavior that
+  was actually correct, and the harness was fixed rather than the expectation.</li>
+  <li>Planting "reject responses without <code>siteNumber</code>" passed every test and broke a
+  proof. A new fixture was added (<a href="10-planted-bugs.html">Lesson 10</a>).</li>
+</ul>
+
+<h3>Writing these lessons</h3>
+<p>Writing a lesson is another review, and it found things too:</p>
+<ul>
+  <li>Reading the theorem statements against the requirements while writing
+  <a href="06-the-spec.html">Lesson 6</a> showed that <code>parseArgs_dup</code> is narrower than
+  requirement A20.</li>
+  <li>The first attempt at re-running the audit's negative test edited the obligation list as well,
+  and so "passed" (<a href="10-planted-bugs.html">Lesson 10</a>).</li>
+  <li>Every excerpt on these pages is machine-checked against the repository
+  (<a data-gh="blob/main/scripts/check-lessons.py" href="../../scripts/check-lessons.py"><code>scripts/check-lessons.py</code></a>),
+  and that checker was itself given known-wrong excerpts before being trusted.</li>
+</ul>
+
+<h2>What the process says about the method</h2>
+<p>Look at where problems were actually found:</p>
+<div class="table-wrap"><table>
+<tr><th>Found by…</th><th>What</th></tr>
+<tr><td>trying to write requirements (Stage 1)</td><td>the NaN threshold bug, string-compared timestamps, URL injection, float rounding</td></tr>
+<tr><td>the type checker (Stage 3)</td><td>missing index-bound proofs; an under-specified correspondence between records and readings</td></tr>
+<tr><td>planting bugs</td><td>a test gap (missing <code>siteNumber</code>); a vacuous test; an audit that couldn't see deletions</td></tr>
+<tr><td>the proofs (Stage 5)</td><td>an over-weak spec (unused hypotheses); no implementation bugs</td></tr>
+<tr><td>running both programs side by side (Stage 6)</td><td>an error in the Stage 1 analysis</td></tr>
+<tr><td>reading statements against requirements</td><td>a theorem narrower than its requirement</td></tr>
+</table></div>
+<p>The proofs themselves found no bugs in the implementation. That's the typical pattern. By the
+time you can state a theorem precisely, you've usually already found the bugs, because stating it
+precisely is where they show up. What the proofs add is a guarantee that no bugs of those kinds are
+left, for any input. They also keep that true through future changes, because a change that breaks
+a proof doesn't build.</p>
+
+<nav class="pager">
+  <a class="prev" href="12-shell-and-tcb.html"><span class="label">← Previous</span>The shell and the trusted base</a>
+  <a class="next" href="14-takeaways.html"><span class="label">Next →</span>What to take back to your day job</a>
+</nav>
+</main>
+</body>
+</html>

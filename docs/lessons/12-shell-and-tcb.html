@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Shell and Trusted Base</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 12 · Stage 6</p>
+<h1>The shell and the trusted base</h1>
+<p class="lede">Stage 6 lists everything the proofs assume, and adds tests aimed at those
+assumptions. Without this stage, "formally verified" would claim more than the proofs actually
+show.</p>
+
+<div class="stage-links">
+  <strong>Stage 6</strong>
+  <a data-gh="commit/58b905b">commit 58b905b</a>
+  <a data-gh="compare/stage-5...stage-6">what changed since stage-5</a>
+  <a data-gh="blob/stage-6/Main.lean" href="../../Main.lean">Main.lean</a>
+  <a data-gh="blob/stage-6/docs/06-shell-and-tcb.md" href="../../docs/06-shell-and-tcb.md">docs/06-shell-and-tcb.md</a>
+</div>
+
+<h2>The shell</h2>
+<p><a data-gh="blob/stage-6/Main.lean" href="../../Main.lean"><code>Main.lean</code></a> is the only code
+that touches the outside world. Its core is an interpreter for <code>Prog</code>, one line per
+constructor:</p>
+<pre><code class="lean" data-src="stage-6:Main.lean:70-78">/-- The interpreter: one line per `Prog` constructor. -/
+partial def interp : Prog → IO UInt32
+  | .done e => return e.toUInt32
+  | .get r k => do interp (k (← httpGet r))
+  | .zoneAt t k => do interp (k (← zoneAt t))
+  | .clock k => do interp (k (← now))
+  | .out s k => do IO.print s; (← IO.getStdout).flush; interp k
+  | .err s k => do IO.eprint s; (← IO.getStderr).flush; interp k
+  | .post r k => do interp (k (← httpPost r))</code></pre>
+<p>Read <code>.get r k => do interp (k (← httpGet r))</code> as: "perform the GET for real, pass the
+answer to the continuation <code>k</code>, and interpret whatever program it returns". The shell
+<strong>makes no decisions</strong>. What to fetch, what to print, whether to alert and which exit status
+to return were all decided by the verified <code>LakeLevel.main</code>.</p>
+<p>The rest of the file runs <code>curl</code> as a child process for HTTPS, rather than having the project
+implement HTTP and TLS itself. curl is very widely used, which makes it a reasonable thing to trust.</p>
+<pre><code class="lean" data-src="stage-6:Main.lean:31-42">/-- Common curl flags: quiet but report errors, 30 s total (A21), HTTPS only,
+and print the status code on a final line of its own. -/
+def curlBase (req : Request) : Array String :=
+  #["--silent", "--show-error", "--max-time", "30", "--proto", "=https",
+    "--request", req.method, "--write-out", "\n%{http_code}"] ++
+  (req.headers.toArray.flatMap fun (k, v) => #["--header", s!"{k}: {v}"])
+
+/-- Split curl's output into body and the status line it appended. -/
+def splitStatus (out : String) : Option (String × Nat) :=
+  match out.splitOn "\n" |>.reverse with
+  | code :: rest => code.toNat?.map fun n => ("\n".intercalate rest.reverse, n)
+  | [] => none</code></pre>
+<p>Every flag here is an assumption about how curl behaves. <code>--write-out "\n%{http_code}"</code>
+assumes curl appends a newline and the status code after the body. <code>--max-time 30</code> assumes
+curl gives up after 30 seconds. <code>--proto =https</code> assumes it refuses anything else. None of
+that can be proved in Lean. All of it is checked below.</p>
+
+<h2>The trusted computing base</h2>
+<p>The <strong>trusted computing base</strong> (TCB) is everything the guarantees depend on but
+don't check. Here it is in full, from
+<a data-gh="blob/stage-6/docs/06-shell-and-tcb.md" href="../../docs/06-shell-and-tcb.md"><code>docs/06</code></a>:</p>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Trusted</th><th>If it's wrong</th><th>Mitigation</th></tr>
+<tr><td>1</td><td>Lean kernel and its three standard axioms</td><td>a false theorem is accepted</td><td>industry-standard foundation; the audit confirms nothing else is used</td></tr>
+<tr><td>2</td><td>Lean compiler (Lean → C → native)</td><td>the binary doesn't behave like the proved definitions</td><td>end-to-end and differential tests run the <em>binary</em></td></tr>
+<tr><td>3</td><td><code>Lean.Json.parse</code></td><td>a body decodes to a different JSON value</td><td>fixtures from real responses</td></tr>
+<tr><td>4</td><td><code>Lean.Json.pretty</code></td><td><code>--json</code> text doesn't mean what was proved</td><td>end-to-end test parses the output with Python's <code>json</code></td></tr>
+<tr><td>5</td><td><code>toString</code>, string interpolation</td><td>a fallback name or message is mis-rendered</td><td>not decision-relevant; tests</td></tr>
+<tr><td>6</td><td><strong><code>Main.lean</code></strong></td><td>wrong primitive for a constructor; status mis-parsed</td><td>small enough to read; end-to-end tests with a fake curl; 5/5 planted bugs caught</td></tr>
+<tr><td>7</td><td><strong>curl</strong></td><td>doesn't send what we built, mis-reports status, ignores the timeout</td><td>a contract test against real curl</td></tr>
+<tr><td>8</td><td>TLS, DNS, the network</td><td>spoofed or tampered data</td><td><code>--proto =https</code>; curl's certificate checks</td></tr>
+<tr><td>9</td><td>hydromet.lcra.org</td><td>sends wrong numbers</td><td>out of scope: no software can verify its inputs are <em>true</em></td></tr>
+<tr><td>10</td><td>ntfy.sh</td><td>says 2xx, then doesn't deliver</td><td>out of scope</td></tr>
+<tr><td>11</td><td>tz database, system clock</td><td>wrong local time or age</td><td>display only: they can't affect the level, the alert decision, or the exit status</td></tr>
+</table></div>
+
+<h3>Why row 6 matters most</h3>
+<p>Recall the headline theorem: in every world, if the alert condition held and the program exited
+0, <strong>the world reported</strong> a 2xx for the POST. "The world" is whatever <code>Main.lean</code>
+says it is. If <code>httpPost</code> had a bug that returned <code>.response 200</code> for every POST,
+every theorem would still be true, and the tool would silently fail to alert, which is the exact
+failure the whole project exists to prevent.</p>
+<p>That mutation was planted (<a href="10-planted-bugs.html">Lesson 10</a>), and the end-to-end
+suite caught it: 7 checks failed, including <code>HTTP 500 → exit 1</code>.</p>
+<div class="box key"><span class="box-title">Where the risk went</span>
+<p>Before the proofs, the risk was spread across about 450 lines of logic. Afterwards, it's concentrated
+in 80 lines of shell plus a list of external components, each named, each with a test aimed at
+it. What formal verification gives you here is knowing exactly where the remaining risk is.</p>
+</div>
+
+<h2>Tests aimed at the trusted base</h2>
+
+<h3>1. A contract test against real curl</h3>
+<p><a data-gh="blob/stage-6/test/curl-contract.sh" href="../../test/curl-contract.sh"><code>test/curl-contract.sh</code></a>
+starts a small local HTTP server and runs the <strong>real</strong> curl with the shell's exact
+flags:</p>
+<pre><code data-src="stage-6:test/curl-contract.sh:15-23"># Same flags as Main.lean's curlBase, minus --proto =https (the local server is plain http).
+base=(--silent --show-error --max-time 30 --write-out $'\n%{http_code}')
+
+body=$'Site lake level is 677.58 ft (MSL) as of 2026-10-20T03:55:09Z.\nLevel has reached the alert threshold.'
+for code in 200 500; do
+  out=$(printf '%s' "$body" | curl "${base[@]}" --request POST --header 'Title: t' \
+        --data-binary @- --output /dev/null -- "http://127.0.0.1:$port/$code"; echo "|rc=$?")
+  check "POST $code: stdout is exactly \\n$code, curl exits 0" $'\n'"$code|rc=0" "$out"
+done</code></pre>
+<pre class="output pass"><code>ok   POST 200: stdout is exactly \n200, curl exits 0
+ok   POST 500: stdout is exactly \n500, curl exits 0
+ok   POST body arrives byte-identical (newline preserved)
+ok   GET: body, \n, status as the last line, curl exits 0
+ok   --header User-Agent replaces curl's default
+ok   refused connection: curl exits 7
+ok   refused connection: message on stderr
+ok   --proto =https refuses plain http (exit 1)</code></pre>
+<p>The second line is the important one. Curl <em>exits 0 on an HTTP 500</em>, because as far as
+curl is concerned the request worked and the server simply refused it. If the shell treated curl's exit status as "delivered", every failed alert
+would look successful. The contract test pins that behavior down.</p>
+
+<h3>2. A fake curl that can't drift</h3>
+<p>The end-to-end tests run the real binary, with a fake <code>curl</code> first on <code>PATH</code>.
+The fake logs every call and answers with whatever the test asks for:</p>
+<pre><code data-src="stage-6:test/fakebin/curl:22-31">if [ "$method" = POST ]; then
+  cat &gt; "$FAKE_LOG/$n-POST.body"
+  [ -n "${FAKE_STDOUT:-}" ] &amp;&amp; stat -c %s "$FAKE_STDOUT" &gt; "$FAKE_LOG/$n-POST.stdout-bytes-before"
+  if [ "${FAKE_FAIL:-}" = post ]; then echo "curl: (28) Operation timed out after 30001 milliseconds" &gt;&amp;2; exit 28; fi
+  printf '\n%s' "${FAKE_POST_STATUS:-200}"
+else
+  if [ "${FAKE_FAIL:-}" = get ]; then echo "curl: (6) Could not resolve host: hydromet.lcra.org" &gt;&amp;2; exit 6; fi
+  cat "$FAKE_GET_BODY"
+  printf '\n%s' "${FAKE_GET_STATUS:-200}"
+fi</code></pre>
+<p>A fake is only useful if it behaves like the real thing. This one reproduces exactly the output
+format the contract test verified against real curl: body, newline, status, exit 0. So if curl's
+behavior ever changed, the contract test would fail, rather than the fake silently drifting away
+from reality.</p>
+<div class="box cpp"><span class="box-title">C++ analogy</span>
+<p>It's the standard problem with mocks: a mock of <code>HttpClient</code> encodes your
+<em>belief</em> about <code>HttpClient</code>. A contract test runs the same assertions against the
+real dependency and the mock, so the belief is checked too.</p>
+</div>
+
+<h3>3. End-to-end tests of the binary</h3>
+<p><a data-gh="blob/stage-6/test/e2e.sh" href="../../test/e2e.sh"><code>test/e2e.sh</code></a> has 65
+checks. They cover the exact report text, the JSON (parsed by Python, not compared as text), the
+URL and headers sent, every usage error (exit 2 and <em>zero</em> curl calls), every bad-response
+fixture (exit 1, nothing on stdout, no POST), HTTP 500/302 and timeouts on the alert (exit 1), and a
+bogus <code>TZ</code>. One check is worth pointing out: R52, "report before alert", checked at run time.</p>
+<pre><code data-src="stage-6:test/e2e.sh:69-69">eq "report fully written before POST (R52)" "$(stat -c %s "$out")" "$(cat "$log"/1-POST.stdout-bytes-before)"</code></pre>
+<p>When the fake curl receives the POST, it records how many bytes of the binary's stdout already
+exist. The test requires that to equal the final size. The theorem proves the <code>Prog</code> orders
+them correctly; this checks the shell actually flushed stdout before starting curl.</p>
+
+<h3>4. Side by side with the original</h3>
+<p><a data-gh="blob/stage-6/test/differential.sh" href="../../test/differential.sh"><code>test/differential.sh</code></a>
+runs the original Python and the new binary on the same fixtures. Every difference has to be one
+the ambiguity register decided on purpose; anything else would be a bug in one of them. A selection
+from the output, with the alert threshold set to 600:</p>
+<div class="table-wrap"><table>
+<tr><th>Fixture</th><th>Original</th><th>This</th><th>Why</th></tr>
+<tr><td>real response</td><td>exit 0, alert</td><td>exit 0, alert</td><td>identical report text</td></tr>
+<tr><td>a <em>non-newest</em> record has <code>value1: null</code></td><td><strong>exit 0, alert sent</strong></td><td>exit 1: <code>a record has no numeric value1</code></td><td>A7: corrupt data is rejected, not ignored</td></tr>
+<tr><td>a timestamp with <code>+00:00</code> offset</td><td>exit 0, alert sent</td><td>exit 1: invalid timestamp</td><td>A1, A2</td></tr>
+<tr><td>the date 2026-02-29</td><td>exit 0, alert sent</td><td>exit 1: invalid timestamp</td><td>A2: 2026 isn't a leap year</td></tr>
+<tr><td><code>siteNumber</code> isn't the site requested</td><td><strong>exit 0, alert sent for another site's level</strong></td><td>exit 1: different site</td><td>A10</td></tr>
+<tr><td><code>value1Type: "Stage"</code> (not a lake level)</td><td><strong>exit 0, alert sent on a river stage reading</strong></td><td>exit 1: not lake-level data</td><td>A9</td></tr>
+</table></div>
+<p>In the rows in bold, the original sends an alert based on corrupt data, or on data that isn't
+the lake level the user asked for. None of these were found by testing the original. They were found
+in Stage 1 by asking what the PRD meant, and confirmed here by running both.</p>
+
+<h2>What is still not covered</h2>
+<ul>
+  <li><strong>Real ntfy delivery was never exercised.</strong> POSTing to ntfy.sh publishes to a
+  public topic, so it was left for the owner to run deliberately:
+  <code>lake-level --threshold 0 --ntfy-topic &lt;your-topic&gt;</code>.</li>
+  <li><strong>The 30-second timeout actually firing</strong> wasn't tested end to end. That the flag
+  is passed is tested; that curl honors it is assumed (row 7).</li>
+  <li><strong>TLS certificate validation</strong> is curl's default and isn't tested here.</li>
+  <li><strong>Compiler correctness</strong> (row 2) is covered only by tests of the binary.</li>
+  <li>The <strong>exact report and alert text</strong> is a template, proved only in the weak sense
+  of "the implementation is that template". Its correctness rests on review against the PRD and on
+  byte-for-byte tests.</li>
+</ul>
+<div class="box process"><span class="box-title">Process note</span>
+<p>"Not covered" sections are easy to leave out, and leaving them out is how a verified system
+gets over-trusted. The rule followed here: if a test environment can't cover something, say so
+plainly rather than writing a test that looks like it does.</p>
+</div>
+
+<div class="box try"><span class="box-title">Try it</span>
+<p>Run <code>scripts/check-all.sh</code>. It does every check in order of strength: build (with
+proofs and compile-time tests), audit, curl contract, end-to-end, the check of these lessons, and the differential run against the
+original. Then pick a row of the TCB table and design one more test aimed at it.</p>
+</div>
+
+<nav class="pager">
+  <a class="prev" href="11-where-is-the-program.html"><span class="label">← Previous</span>Where is the actual program?</a>
+  <a class="next" href="13-behind-the-scenes.html"><span class="label">Next →</span>Behind the scenes</a>
+</nav>
+</main>
+</body>
+</html>

@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Implementation and Tests</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 7 · Stage 4</p>
+<h1>An implementation that passes its tests</h1>
+<p class="lede">Stage 4 fills in every function and adds tests that run during the build. All 48
+theorems are still <code>sorry</code>. Most software stops at this point, so this lesson looks
+at exactly what we have here, and what we don't have yet.</p>
+
+<div class="stage-links">
+  <strong>Stage 4</strong>
+  <a data-gh="commit/5965e50">commit 5965e50</a>
+  <a data-gh="compare/stage-3...stage-4">what changed since stage-3</a>
+  <a data-gh="tree/stage-4/LakeLevel/Impl">LakeLevel/Impl/ at stage-4</a>
+  <a data-gh="blob/stage-4/test/Tests.lean" href="../../test/Tests.lean">test/Tests.lean</a>
+  <a data-gh="blob/stage-4/docs/04-implementation.md" href="../../docs/04-implementation.md">docs/04-implementation.md</a>
+</div>
+
+<h2>Code written with proofs in mind</h2>
+<p>The implementation is ordinary functional code, but each choice was made knowing it would
+have to be proved later. Most of those choices come down to using only operations that Lean's
+automation is good at.</p>
+
+<h3>Rounding with integers only</h3>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Impl/Decimal.lean:37-41">/-- Round `N / D` to an integer, ties away from zero: for `N ≥ 0`,
+`⌊(N + D/2) / D⌋ = ⌊(2N + D) / 2D⌋`; mirrored for `N &lt; 0`. -/
+def roundFrac (N : Int) (D : Nat) : Int :=
+  if 0 ≤ N then (2 * N + D) / (2 * D)
+  else -((2 * (-N) + D) / (2 * D))</code></pre>
+<p>No floating point anywhere. Compare it with the spec <code>RoundsTo</code> from
+<a href="06-the-spec.html">Lesson 6</a>. The two have completely different shapes, as intended,
+and the proof connecting them is real work.</p>
+
+<h3>The calendar: a closed-form formula</h3>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Impl/Calendar.lean:14-22">/-- Days since 0000-03-01 (valid for year ≥ 1). -/
+def daysFrom0 (y mo d : Nat) : Nat :=
+  let y' := if mo ≤ 2 then y - 1 else y
+  let era := y' / 400
+  let yoe := y' % 400                                   -- year of era, [0, 399]
+  let mp := if mo > 2 then mo - 3 else mo + 9           -- March = 0, [0, 11]
+  let doy := (153 * mp + 2) / 5 + d - 1                 -- day of year, [0, 365]
+  let doe := yoe * 365 + yoe / 4 - yoe / 100 + doy      -- day of era, [0, 146096]
+  era * 146097 + doe</code></pre>
+<p>This is Howard Hinnant's well-known <a href="https://howardhinnant.github.io/date_algorithms.html"><code>days_from_civil</code></a>
+(Hinnant also wrote the date library that C++20's <code>&lt;chrono&gt;</code> calendar
+types were standardized from). It counts from 1 March of year 0, so the leap day falls at the end of each
+shifted year. It was chosen because <strong>every division is by a constant</strong>, and
+<code>omega</code>, Lean's linear-arithmetic solver, can reason about division by constants.
+A loop over months would have been easier to read and much harder to prove.</p>
+
+<h3>Executable specs</h3>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Impl/Calendar.lean:64-71">/-- Strict `YYYY-MM-DDTHH:MM:SSZ` parser. -/
+def parseTs (s : String) : Option Instant :=
+  match s.toList with
+  | [y1, y2, y3, y4, '-', m1, m2, '-', d1, d2, 'T', h1, h2, ':', i1, i2, ':', s1, s2, 'Z'] => do
+    let c : Civil :=
+      ⟨← num4 y1 y2 y3 y4, ← num2 m1 m2, ← num2 d1 d2, ← num2 h1 h2, ← num2 i1 i2, ← num2 s1 s2⟩
+    if c.Acceptable then some (secs c) else none
+  | _ => none</code></pre>
+<p>The pattern is exactly 20 characters with the separators fixed; anything else is
+<code>none</code>. Then it calls <code>c.Acceptable</code>, the <em>spec's</em> own definition of
+a valid date, directly, because it's decidable and cheap. Running the spec as code is legitimate
+where the spec is already a simple check. It doesn't make the proof trivial: the proof still
+has to show that this 20-character match reconstructs exactly the date whose canonical text is the
+input.</p>
+
+<h3>The whole program, as a value</h3>
+<p>Here's <code>main</code>. Remember from <a href="04-the-model.html">Lesson 4</a> that it does
+no I/O. It returns a <code>Prog</code>: a tree of requests and continuations.</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Impl/Program.lean:10-39">/-- After the report is written: alert if required (R50–R54). -/
+def finish (cfg : Cfg) (S : Site) (R : Reading) : Prog :=
+  match cfg.threshold with
+  | some th =>
+    if Dec.le th.value R.level then
+      .post (alertReq cfg S R) fun
+        | .response st =>
+          if ok2xx st then .err (alertNotice cfg) (.done 0)
+          else .err (errLine (sanitize s!"ntfy alert failed: HTTP {st}")) (.done 1)
+        | .failed m => .err (errLine (sanitize s!"ntfy alert failed: {m}")) (.done 1)
+    else .done 0
+  | none => .done 0
+
+def main (argv : List String) : Prog :=
+  match parseArgs argv with
+  | .help => .out helpText (.done 0)
+  | .usage m => .err (errLine (sanitize m) ++ usageText) (.done 2)
+  | .ok cfg =>
+    .get (fetchReq cfg) fun
+      | .failed m => .err (errLine (sanitize m)) (.done 1)
+      | .response st body =>
+        if ok2xx st then
+          match decodeBody (siteNum cfg.site) body with
+          | .error m => .err (errLine (sanitize m)) (.done 1)
+          | .ok (S, R) =>
+            if cfg.json then .out (jsonText S R) (finish cfg S R)
+            else
+              .zoneAt R.t fun z => .clock fun now =>
+                .out (humanReport S R z now) (finish cfg S R)
+        else .err (errLine (sanitize s!"hydromet returned HTTP {st}")) (.done 1)</code></pre>
+<p>Read <code>.get (fetchReq cfg) fun | … => …</code> as "GET this request; when the answer
+comes back, here's what to do for each kind of answer". Every exit status in the program is
+visible in these 30 lines. That was deliberate, and it's what makes the whole-program
+theorems in the next lesson provable.</p>
+
+<div class="box caveat"><span class="box-title">A shorthand: <code>|</code> lines with no <code>match</code></span>
+<p><code>fun | .failed m => … | .response st body => …</code> is short for a lambda whose whole body
+is a <code>match</code> on its argument: <code>fun r => match r with | .failed m => … | .response st body => …</code>.
+It's used when the argument only gets taken apart, so it doesn't need a name.</p>
+<p><code>def</code> has the same shorthand. A function's type written with an arrow, followed
+directly by <code>|</code> lines, with no parameter names and no <code>:=</code>, means a function
+whose body is a <code>match</code> on its argument:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Impl/Render.lean:12-14">def Meridiem.text : Meridiem → String
+  | .am =&gt; "AM"
+  | .pm =&gt; "PM"</code></pre>
+<p>is the same as <code>def Meridiem.text (m : Meridiem) : String := match m with | .am => "AM" | .pm => "PM"</code>.
+You'll see it again in the shell's interpreter in <a href="12-shell-and-tcb.html">Lesson 12</a>.</p>
+</div>
+
+<h2>Tests that run at compile time</h2>
+<p><a data-gh="blob/stage-6/test/Tests.lean" href="../../test/Tests.lean"><code>test/Tests.lean</code></a>
+is compiled as part of <code>lake build</code>. <code>#guard e</code> fails the build unless
+<code>e</code> evaluates to <code>true</code>, like a <code>static_assert</code> that can call any
+function. <code>#eval</code> blocks run arbitrary checks, including reading fixture files.</p>
+<p>The rule for expected values: <strong>they never come from the implementation</strong>.
+They come from the PRD's examples, from the decisions in the ambiguity register, and from
+independent tools. Every epoch value here came from GNU <code>date</code>:</p>
+<pre><code class="lean" data-src="stage-6:test/Tests.lean:44-51">/-! ## Calendar: expected values from GNU `date -u -d … +%s` -/
+
+#guard parseTs "2026-10-20T03:55:09Z" == some 1792468509
+#guard parseTs "1970-01-01T00:00:00Z" == some 0
+#guard parseTs "2000-02-29T23:59:59Z" == some 951868799
+#guard parseTs "2000-03-01T00:00:00Z" == some 951868800
+#guard parseTs "2024-12-31T23:59:59Z" == some 1735689599
+#guard parseTs "9999-12-31T23:59:59Z" == some 253402300799</code></pre>
+<p>And because <code>main</code> returns a value, the whole program can be tested in hand-built
+worlds, with no network and no mocking framework:</p>
+<pre><code class="lean" data-src="stage-6:test/Tests.lean:151-173">/-- A world whose GET returns `body` and whose POST returns `postResult`.
+The POST stub returns a *fixed* answer, not one derived from the request,
+so it can't accidentally agree with the code under test. -/
+def worldWith (body : String) (postResult : PostResult) : World :=
+  { get := fun _ => .response 200 body, zone := fun _ => ⟨-18000, "CDT"⟩,
+    now := 1792468509 + 300, post := fun _ => postResult }
+
+#eval do
+  let body ← fx "site3963"
+  let posts (argv : List String) (pr : PostResult) :=
+    ((main argv).run (worldWith body pr)).1.filter Event.isPost |>.length
+  let exitOf (argv : List String) (pr : PostResult) := ((main argv).run (worldWith body pr)).2
+  -- at / above / below threshold (level is 677.58)
+  check "alert at equal" (posts ["--threshold", "677.58"] (.response 200) == 1)
+  check "alert below"    (posts ["--threshold", "600"] (.response 200) == 1)
+  check "no alert above" (posts ["--threshold", "677.59"] (.response 200) == 0)
+  check "no threshold"   (posts [] (.response 200) == 0)
+  -- R62, with known-wrong worlds injected: every failed delivery must exit non-zero
+  check "delivered → 0"  (exitOf ["--threshold", "600"] (.response 200) == 0)
+  check "HTTP 500 → 1"   (exitOf ["--threshold", "600"] (.response 500) == 1)
+  check "HTTP 302 → 1"   (exitOf ["--threshold", "600"] (.response 302) == 1)
+  check "network → 1"    (exitOf ["--threshold", "600"] (.failed "timeout") == 1)
+  check "usage → 2"      (exitOf ["--threshold", "nan"] (.response 200) == 2)</code></pre>
+<p>Note the stub's design. The fake POST returns a <em>fixed</em> result chosen by the test,
+never one computed from the request. A stub that derived its answer from what the code sent
+could end up agreeing with a bug.</p>
+<p>The fixtures in <a data-gh="tree/stage-6/test/fixtures"><code>test/fixtures/</code></a> are a
+real API response, trimmed, plus doctored copies: a <code>null</code> value, a timestamp with a
+<code>+00:00</code> offset, the impossible date 2026-02-29, the wrong site number, a tie for
+newest, and so on.</p>
+
+<h2>Testing the tests</h2>
+<p>To check that the tests could fail at all, four plausible bugs were planted in the
+implementation, one at a time, and the build had to fail for each:</p>
+<div class="table-wrap"><table>
+<tr><th>Planted bug</th><th>Caught by</th></tr>
+<tr><td><code>select</code>: <code>&lt;</code> → <code>≤</code> (the <em>last</em> of tied readings wins)</td><td><a data-gh="blob/stage-4/test/Tests.lean#L77" href="../../test/Tests.lean">Tests.lean:77</a></td></tr>
+<tr><td><code>roundFrac</code>: ties toward zero</td><td><a data-gh="blob/stage-4/test/Tests.lean#L30" href="../../test/Tests.lean">Tests.lean:30</a></td></tr>
+<tr><td><code>hour12 0 = (0, AM)</code> (midnight shown as 00)</td><td><a data-gh="blob/stage-4/test/Tests.lean#L69" href="../../test/Tests.lean">Tests.lean:69</a></td></tr>
+<tr><td><code>ok2xx</code> accepts any status ≥ 200</td><td><a data-gh="blob/stage-4/test/Tests.lean#L155" href="../../test/Tests.lean">Tests.lean:155</a> ("HTTP 500 → 1")</td></tr>
+</table></div>
+<p>(Line numbers are as of <code>stage-4</code>.) <a href="10-planted-bugs.html">Lesson 10</a>
+does the same thing to the proofs, and finds a bug these tests miss.</p>
+
+<h2>What we have, and what we don't</h2>
+<pre class="output fail"><code>$ lake env lean scripts/Audit.lean
+theorems proved from standard axioms only: 0
+theorems still depending on sorry: 48
+definitions still depending on sorry: 0</code></pre>
+<p>Every test passes, and every definition is real. But a test is a "there exists" claim: there
+are inputs on which it works. Every obligation in <code>Proofs/</code> is a "for all" claim. The
+tests check <code>parseTs</code> on 22 strings; <code>parseTs_spec</code> covers every string.
+The tests check three HTTP statuses and one network failure for the alert; <code>never_silently_fails</code> covers all of
+them, in every combination with every response body, clock and time zone.</p>
+
+<div class="box process"><span class="box-title">Process note</span>
+<p>Neither the tests nor, later, the proofs found a bug in this implementation. That's
+normal. The code was written carefully against a precise spec, with the
+proofs in mind. Most of the bug-finding happened earlier, in Stage 1, before any code existed.
+What the proofs add (next lesson) is the step from "we looked hard and found nothing" to "no
+input can cause this".</p>
+</div>
+
+<div class="box try"><span class="box-title">Try it</span>
+<p>Plant a bug yourself. Change <code>(2 * N + D)</code> to <code>(2 * N + D - 1)</code> in
+<code>roundFrac</code>, run <code>lake build Tests</code>, and see which test catches it. Then put
+it back. (Building <code>Tests</code> also builds the proofs, so a proof will fail too. To see
+only the tests, build at <code>stage-4</code>, where the proofs are still <code>sorry</code>.)</p>
+</div>
+
+<nav class="pager">
+  <a class="prev" href="06-the-spec.html"><span class="label">← Previous</span>The spec, in Lean</a>
+  <a class="next" href="08-reading-a-proof.html"><span class="label">Next →</span>Anatomy of a proof</a>
+</nav>
+</main>
+</body>
+</html>

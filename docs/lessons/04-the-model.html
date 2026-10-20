@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Formal Model</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 4 · Stage 2</p>
+<h1>The model: the design before the code</h1>
+<p class="lede">Stage 2 turns the requirements into mathematical objects. They're written in
+ordinary maths notation, so the ideas are visible before any Lean syntax gets in the way. Stage 2
+also makes three design decisions that the rest of the project depends on.</p>
+
+<div class="stage-links">
+  <strong>Stage 2</strong>
+  <a data-gh="commit/2a253c8">commit 2a253c8</a>
+  <a data-gh="compare/stage-1...stage-2">what changed since stage-1</a>
+  <a data-gh="blob/stage-2/docs/02-formal-model.md" href="../../docs/02-formal-model.md">docs/02-formal-model.md</a>
+</div>
+
+<h2>Idea 1: a spec must not be a copy of the code</h2>
+<p>Suppose the spec for rounding were "the result is <code>(2N + D) / (2D)</code>", which happens to
+be the formula the implementation uses. Then the proof that the implementation meets the spec is
+trivial, and it tells you nothing: if the formula is wrong, the spec is wrong in exactly the same
+way.</p>
+<div class="box cpp"><span class="box-title">C++ analogy</span>
+<p>It's the formal version of a test mistake you've probably seen: the expected value in the
+test was computed by calling the function under test, or by copy-pasting its logic. The test
+can never fail. A spec that restates the algorithm has the same problem.</p>
+</div>
+
+<p>So every spec in this project is written in a <em>different style</em> from the code it
+constrains:</p>
+<div class="table-wrap"><table>
+<tr><th>Style</th><th>Example here</th><th>The implementation instead…</th></tr>
+<tr><td><strong>Relational</strong>: says when an answer is acceptable</td><td>rounding: "<var>k</var> is within ½ of <var>x</var>; ties go away from zero"</td><td>uses integer division</td></tr>
+<tr><td><strong>Characterization</strong>: rules that only one function satisfies</td><td>calendar: "day(1970-01-01) = 0, and day(tomorrow) = day(today) + 1"</td><td>uses a closed-form formula with divisions by 4, 100, 400, 153 and 146097</td></tr>
+<tr><td><strong>Inverse</strong>: round trip</td><td>timestamp parsing: <code>parse(s) = t</code> exactly when <code>s</code> is the rendering of a real date that denotes <code>t</code></td><td>pattern-matches 20 characters</td></tr>
+<tr><td><strong>Declarative</strong>: describes the answer, not the search</td><td>"the reading at some index <var>i</var>, with nothing later, and everything before <var>i</var> strictly earlier"</td><td>is a loop that keeps the best reading so far</td></tr>
+<tr><td><strong>Whole-run properties</strong>: about everything the tool does, whatever the network, clock and time zone do</td><td>"never exit 0 having failed to alert"</td><td>is the whole tool (Idea 3 shows how this can be stated)</td></tr>
+<tr><td><strong>Template</strong> (the fallback)</td><td>the exact text of the report</td><td>is that template. Checked against the PRD's examples, not proved meaningful.</td></tr>
+</table></div>
+<p>The calendar one is worth a second look. The spec never mentions leap years in a formula.
+It only uses "tomorrow", which is easy to define obviously correctly: if the day is less than
+the number of days in the month, add one; otherwise go to the first of the next month; after
+December, go to the next year. Any function that starts at 0 on 1 January 1970 and goes up by exactly one
+every "tomorrow" <em>is</em> the day count. There's only one such function.</p>
+
+<div class="box key"><span class="box-title">Nothing protects you from triviality</span>
+<p>It's easy to assume that working formally keeps you safe from a tautological spec. It
+doesn't. A spec that repeats the implementation's algorithm passes every check in this project:</p>
+<ul>
+  <li>it type-checks;</li>
+  <li>its proofs go through, often more easily than proofs against an independent spec;</li>
+  <li>the audit from <a href="01-what-is-fv.html">Lesson 1</a> reports every theorem proved, using only the standard axioms;</li>
+  <li>the planted-bug checks of <a href="10-planted-bugs.html">Lesson 10</a> still pass. Change the
+  implementation and a proof against a copied spec breaks, exactly as a proof against a good spec
+  would.</li>
+</ul>
+<p>Nothing turns red. The only protection is a person deciding, for each spec, that it describes
+the answer differently from how the code computes it, and a second person checking that
+decision.</p>
+</div>
+
+<h3>How this project keeps them different</h3>
+<p>Since no tool can tell you that a spec restates the code, the project relies on three habits
+instead:</p>
+<ul>
+  <li><strong>The spec was written first.</strong> Stage 3 writes the whole spec before Stage 4
+  writes any implementation, so there was no code to copy.</li>
+  <li><strong>Ask how you would recognize a correct answer.</strong> When you can't think of a
+  second way to describe something, ask how you would <em>recognize</em> a correct answer without
+  computing it. Checking an answer is often much
+  simpler than producing one: "within ½ of <var>x</var>, ties away from zero" is easier to state
+  than the integer division that achieves it.</li>
+  <li><strong>Check some of the spec against answers from outside.</strong> For some specs, such
+  as rounding, a theorem proves that the spec allows exactly one answer. The tests compare the
+  implementation with values taken from outside the code (the PRD's examples, GNU
+  <code>date</code>). The implementation meets the spec, the spec allows one answer, and that
+  answer matches the outside value, so on those examples the spec is right. Away from the
+  examples, a spec and an implementation that make the same mistake still agree.</li>
+</ul>
+<p>Noticing that a spec and its implementation use the same technique is left to a reviewer who
+didn't write the code and who reads the spec against the requirements. When no independent
+description can be found, the result is the Template row in the table: the spec is the code, and
+the tests use expected values from somewhere else.</p>
+
+<h2>Idea 2: a pure core and a thin shell</h2>
+<p>You can prove things about a function from inputs to outputs. You can't prove much about
+"whatever the network does next". <a href="03-requirements.html">Lesson 3</a>'s tags already
+pointed at this: the requirements tagged <strong>P</strong>roved must live in code that does no I/O
+at all. So the tool is split in two:</p>
+<ul>
+  <li>a <strong>pure core</strong>, which never performs I/O. Everything it needs from the outside
+  world comes in as arguments, and everything it produces goes out as return values;</li>
+  <li>a <strong>shell</strong>, which performs the I/O and calls the core.</li>
+</ul>
+<p>The pattern is called <em>functional core, imperative shell</em>. It's worth using even
+without proofs, because the core becomes easy to unit-test.</p>
+<p>Lean enforces the split for you. A Lean function that performs I/O has to say so in its type:
+it returns an <code>IO</code> value. A function whose type doesn't mention <code>IO</code> can't
+perform I/O (apart from debug tracing and deliberately unsafe escape hatches), so the compiler
+checks that the core stays pure. Haskell works the same way, if you're familiar with it. In other
+languages, you can follow the pattern by discipline instead.</p>
+<p>The most direct way to apply the pattern to <code>lake-level</code> would be a shell like this
+sketch, which calls pure functions for every computation:</p>
+<pre><code>main(argv):
+  cfg      = parseArgs(argv)                  # pure
+  response = httpGet(fetchRequest(cfg))       # I/O
+  reading  = decode(response)                 # pure
+  print(report(reading))                      # I/O
+  if shouldAlert(cfg, reading):               # pure
+    status = httpPost(alertRequest(cfg, reading))   # I/O
+    if status is not 2xx:
+      exit 1
+  exit 0</code></pre>
+<p>Every function the shell calls could be proved. But look at what the shell itself still decides:
+what to fetch first, that the report is printed before the alert is sent, and that a failed alert
+means exit 1. That last line is R62, "never exit 0 having failed to alert", the requirement
+<a href="01-what-is-fv.html">Lesson 1</a> called the most important in the project. In this sketch
+it's a line of shell code, and no theorem covers it.</p>
+
+<h2>Idea 3: the computation itself is a value</h2>
+<p>In the sketch above, the shell is in charge. The tool is mostly unproven code with small proven
+pieces set into it, like gems in clay.</p>
+<p><code>lake-level</code> proves more of the code by reversing that relationship. The part in
+charge is the pure core: it makes every decision, including the R62 one, and the proofs cover all
+of them. What's left unproven is a thin outer layer that carries out the core's requests and
+decides nothing, plus a few trusted components the core relies on from inside, such as the JSON
+parser. The tool is mostly proven code, with a few unproven pieces inside it and a thin unproven
+layer around it, like a diamond with small inclusions.</p>
+<p>In <code>lake-level</code>, the core is about 450 lines and makes every decision. The shell is 80
+lines and makes none. <a href="12-shell-and-tcb.html">Lesson 12</a> is about that outer layer and
+those inclusions.</p>
+
+<h3>How the core stays in charge without doing I/O</h3>
+<p>The core can't perform I/O, so it can't make the request and then decide what to do with the
+answer. Instead, it returns a description of the whole computation, as a value of type
+<code>Prog</code>. (<code>Prog</code> is short for "program", but in these lessons it always means
+this value, never the <code>lake-level</code> tool as a whole.)</p>
+<p>A <code>Prog</code> is a chain of steps. Each step either asks the outside world one question
+(fetch this URL, what time is it), prints some text, or ends the run. The chain doesn't exist in
+advance. When the core returns, only the first step exists, along with a function that will
+compute the next step once the first one's answer is known. Every later step works the same
+way.</p>
+<p>The answers come from the <strong>world</strong>: whoever replies to the HTTP request, the
+system clock, the time-zone database. This is the same "world" as in
+<a href="01-what-is-fv.html">Lesson 1</a>'s theorem, which held for every possible world. The world
+supplies one operation for each kind of question. An <strong>executor</strong> works through the
+chain. It takes the current step, gets the answer from the world, and calls the step's
+<code>next</code> function with it to get the following step.</p>
+<p>So each step is split in two. The world supplies how to answer the question, and the step
+supplies what to do with the answer:</p>
+<div class="table-wrap"><table>
+<tr><th>Step</th><th>The step holds</th><th>The world supplies</th><th>In <code>lake-level</code>, <code>next</code>…</th></tr>
+<tr><td><code>httpGet</code></td><td>a request, and <code>next</code></td><td><code>get : Request → GetResult</code></td><td>checks the status, decodes the body and picks the newest reading, then returns a <code>zoneAt</code>; returns an <code>err</code> if anything is wrong</td></tr>
+<tr><td><code>clock</code></td><td><code>next</code></td><td><code>now : Instant</code></td><td>builds the report, then returns an <code>out</code></td></tr>
+<tr><td><code>zoneAt</code></td><td>an instant, and <code>next</code></td><td><code>zone : Instant → Zone</code></td><td>returns a <code>clock</code></td></tr>
+<tr><td><code>httpPost</code></td><td>a request, and <code>next</code></td><td><code>post : Request → PostResult</code></td><td>checks the status, then returns an <code>err</code>: the alert notice, then exit 0; or an error message, then exit 1</td></tr>
+<tr><td><code>out</code></td><td>some text, and <code>next</code> (already a <code>Prog</code>)</td><td>nothing; the executor prints the text to stdout</td><td>is the <code>httpPost</code> if an alert is due, otherwise <code>done</code></td></tr>
+<tr><td><code>err</code></td><td>some text, and <code>next</code> (already a <code>Prog</code>)</td><td>nothing; the executor prints the text to stderr</td><td>is a <code>done</code></td></tr>
+<tr><td><code>done</code></td><td>an exit status</td><td>nothing; the executor stops</td><td>(nothing comes after)</td></tr>
+</table></div>
+<p>(<code>A → B</code> is the type of a function that takes an <code>A</code> and returns a
+<code>B</code>.) Whatever the world produces is exactly what that step's <code>next</code> takes: an
+<code>httpGet</code>'s <code>next</code> takes a <code>GetResult</code>, a <code>clock</code>'s takes an
+<code>Instant</code>, and so on. None of the steps receives an answer directly. The answer goes into <code>next</code>, which is
+ordinary pure code in the core, and <code>next</code> decides which step comes after. The types
+are:</p>
+<ul class="compact">
+  <li><code>Request</code>: an HTTP method, URL, headers and body, as plain data.</li>
+  <li><code>GetResult</code>: either <code>response(status, body)</code>, or
+  <code>failed(message)</code> if no response came back (curl couldn't connect, or timed out).</li>
+  <li><code>PostResult</code>: <code>response(status)</code> or <code>failed(message)</code>.</li>
+  <li><code>Instant</code>: a time, in seconds since 1970-01-01 UTC.</li>
+  <li><code>Zone</code>: a UTC offset and an abbreviation, such as CDT.</li>
+</ul>
+<p>A function like <code>next</code>, which receives the result of a step and says what to do after
+it, is called a <strong>continuation</strong>.</p>
+<p>The split is deliberate. Every decision <code>lake-level</code> makes lives in the steps, and
+everything outside its control lives in the world. The core can't know what a server will send
+back, so it doesn't pretend to. It only says what to do with each possible answer. The R62 decision
+from the sketch is now in the <code>next</code> of the <code>httpPost</code> step: given a failed
+POST, it returns an <code>err</code> step that prints an error and ends with exit 1.</p>
+<p>Taken together, the four operations make up a world:</p>
+<pre><code>World = ( get  : Request → GetResult,
+          now  : Instant,
+          zone : Instant → Zone,
+          post : Request → PostResult )</code></pre>
+
+<figure class="diagram">
+<svg viewBox="0 0 900 908" role="img" aria-labelledby="run-t run-d">
+  <title id="run-t">One run, step by step</title>
+  <desc id="run-d">A run of lake-level with threshold 600. Each box on the left is one step, showing its kind and fields. The executor on the right asks the world for that step's answer and calls the step's next function with it, and next returns the following step. httpGet: the world answers response 200, and next returns a zoneAt for 03:55:09Z. zoneAt: the world answers CDT, and next returns a clock. clock: the world answers 04:15:09Z, and next builds the report and returns an out. out: the executor prints the report and moves to its next, an httpPost. httpPost: the world answers response 200, and next returns an err with the alert notice. err: the executor prints it to stderr and moves to its next, a done with exit 0. Dashed boxes show that httpGet's next given a network failure, or httpPost's next given HTTP 500, would return an err leading to exit 1.</desc>
+  <defs><marker id="ah4b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-arrowhead"/></marker></defs>
+  <text class="d-bold" x="20" y="30">Prog steps</text>
+  <text class="d-small" x="20" y="48">main(argv) builds the first one</text>
+  <rect class="d-box" x="370" y="20" width="260" height="868" rx="8"/>
+  <text class="d-bold" x="384" y="42">Executor</text>
+  <rect class="d-box accent" x="20" y="70" width="290" height="74" rx="8"/>
+  <text class="d-bold" x="34" y="92">httpGet</text>
+  <text class="d-small" x="34" y="112" style="font-family: var(--mono)">req:  GET hydromet, site 3963</text>
+  <text class="d-small" x="34" y="130" style="font-family: var(--mono)">next: GetResult → Prog</text>
+  <path class="d-line" d="M310,88 L380,88" marker-end="url(#ah4b)"/>
+  <text class="d-text" x="388" y="92">asks the world: GET</text>
+  <text class="d-small" x="388" y="111">answer: response(200, body)</text>
+  <text class="d-small" x="388" y="130">calls next(answer)</text>
+  <path class="d-line" d="M400,138 L400,170 L170,170 L170,192" marker-end="url(#ah4b)"/>
+  <text class="d-small" x="180" y="164">returns a zoneAt</text>
+  <path class="d-dash" d="M630,107 L652,107" marker-end="url(#ah4b)"/>
+  <rect class="d-box" x="660" y="78" width="230" height="58" rx="8" style="stroke-dasharray: 5 4"/>
+  <text class="d-small" x="672" y="102">given failed(m), next would</text>
+  <text class="d-small" x="672" y="120">return an err, then exit 1</text>
+  <rect class="d-box accent" x="20" y="194" width="290" height="74" rx="8"/>
+  <text class="d-bold" x="34" y="216">zoneAt</text>
+  <text class="d-small" x="34" y="236" style="font-family: var(--mono)">instant: 03:55:09Z</text>
+  <text class="d-small" x="34" y="254" style="font-family: var(--mono)">next:    Zone → Prog</text>
+  <path class="d-line" d="M310,212 L380,212" marker-end="url(#ah4b)"/>
+  <text class="d-text" x="388" y="216">asks the world: zone</text>
+  <text class="d-small" x="388" y="235">answer: CDT (UTC−5)</text>
+  <text class="d-small" x="388" y="254">calls next(answer)</text>
+  <path class="d-line" d="M400,262 L400,294 L170,294 L170,316" marker-end="url(#ah4b)"/>
+  <text class="d-small" x="180" y="288">returns a clock</text>
+  <rect class="d-box accent" x="20" y="318" width="290" height="74" rx="8"/>
+  <text class="d-bold" x="34" y="340">clock</text>
+  <text class="d-small" x="34" y="360" style="font-family: var(--mono)">next: Instant → Prog</text>
+  <path class="d-line" d="M310,336 L380,336" marker-end="url(#ah4b)"/>
+  <text class="d-text" x="388" y="340">asks the world: the time</text>
+  <text class="d-small" x="388" y="359">answer: 04:15:09Z</text>
+  <text class="d-small" x="388" y="378">calls next(answer)</text>
+  <path class="d-line" d="M400,386 L400,418 L170,418 L170,440" marker-end="url(#ah4b)"/>
+  <text class="d-small" x="180" y="412">returns an out (the report)</text>
+  <rect class="d-box note" x="20" y="442" width="290" height="74" rx="8"/>
+  <text class="d-bold" x="34" y="464">out</text>
+  <text class="d-small" x="34" y="484" style="font-family: var(--mono)">text: the report</text>
+  <text class="d-small" x="34" y="502" style="font-family: var(--mono)">next: the httpPost below</text>
+  <path class="d-line" d="M310,460 L380,460" marker-end="url(#ah4b)"/>
+  <text class="d-text" x="388" y="464">prints the text to stdout</text>
+  <text class="d-small" x="388" y="483">no answer to wait for</text>
+  <text class="d-small" x="388" y="502">moves to next</text>
+  <path class="d-line" d="M400,510 L400,542 L170,542 L170,564" marker-end="url(#ah4b)"/>
+  <text class="d-small" x="180" y="536">next is the httpPost</text>
+  <rect class="d-box accent" x="20" y="566" width="290" height="74" rx="8"/>
+  <text class="d-bold" x="34" y="588">httpPost</text>
+  <text class="d-small" x="34" y="608" style="font-family: var(--mono)">req:  POST the ntfy alert</text>
+  <text class="d-small" x="34" y="626" style="font-family: var(--mono)">next: PostResult → Prog</text>
+  <path class="d-line" d="M310,584 L380,584" marker-end="url(#ah4b)"/>
+  <text class="d-text" x="388" y="588">asks the world: POST</text>
+  <text class="d-small" x="388" y="607">answer: response(200)</text>
+  <text class="d-small" x="388" y="626">calls next(answer)</text>
+  <path class="d-line" d="M400,634 L400,666 L170,666 L170,688" marker-end="url(#ah4b)"/>
+  <text class="d-small" x="180" y="660">returns an err</text>
+  <path class="d-dash" d="M630,603 L652,603" marker-end="url(#ah4b)"/>
+  <rect class="d-box" x="660" y="574" width="230" height="58" rx="8" style="stroke-dasharray: 5 4"/>
+  <text class="d-small" x="672" y="598">given response(500), next would</text>
+  <text class="d-small" x="672" y="616">return an err, then exit 1</text>
+  <rect class="d-box note" x="20" y="690" width="290" height="74" rx="8"/>
+  <text class="d-bold" x="34" y="712">err</text>
+  <text class="d-small" x="34" y="732" style="font-family: var(--mono)">text: the alert notice</text>
+  <text class="d-small" x="34" y="750" style="font-family: var(--mono)">next: the done below</text>
+  <path class="d-line" d="M310,708 L380,708" marker-end="url(#ah4b)"/>
+  <text class="d-text" x="388" y="712">prints the text to stderr</text>
+  <text class="d-small" x="388" y="731">no answer to wait for</text>
+  <text class="d-small" x="388" y="750">moves to next</text>
+  <path class="d-line" d="M400,758 L400,790 L170,790 L170,812" marker-end="url(#ah4b)"/>
+  <text class="d-small" x="180" y="784">next is the done</text>
+  <rect class="d-box ok" x="20" y="814" width="290" height="74" rx="8"/>
+  <text class="d-bold" x="34" y="836">done</text>
+  <text class="d-small" x="34" y="856" style="font-family: var(--mono)">exit: 0</text>
+  <path class="d-line" d="M310,832 L380,832" marker-end="url(#ah4b)"/>
+  <text class="d-text" x="388" y="836">stops</text>
+  <text class="d-small" x="388" y="855">the exit status is 0</text>
+</svg>
+<figcaption>One run of <code>lake-level --threshold 600</code> with the lake at 677.58 ft. Each box on
+the left is one step. The executor asks the world for that step's answer, then calls the step's
+<code>next</code> with it, and <code>next</code> returns the following step. It builds that step from
+what it has just computed: the <code>zoneAt</code>'s instant is the timestamp of the reading taken from
+the decoded response. <code>out</code> and <code>err</code> ask nothing, so their <code>next</code> is
+already the following step. The dashed boxes show what the same <code>next</code> would return for a
+different answer.</figcaption>
+</figure>
+
+<h3>Why bother</h3>
+<p>When you run <code>lake-level</code> for real, the world is the actual network, clock and
+time-zone database, and the executor is the shell in <code>Main.lean</code>. But nothing about a
+<code>Prog</code> requires that. Any four functions with the right types make up a world, and a
+<code>Prog</code> can be run against any of them.</p>
+<p>Lean's own <code>IO</code> type couldn't do this. An <code>IO</code> value is opaque: Lean can
+run it, but nothing can look inside it or run it against a different world, so there'd be nothing
+to state theorems about. A <code>Prog</code> is ordinary data, so it can be run against any world,
+including one made up for a proof.</p>
+<p>Running a <code>Prog</code> against a world produces a <strong>trace</strong>, which is the list
+of events an observer would see (a GET, some output, a POST, and so on), and an exit status.
+Properties of the whole tool then become ordinary statements about functions, and they can be
+stated for <strong>every world</strong>:</p>
+<div class="table-wrap"><table>
+<tr><th>Requirement</th><th>Property of <code>run(main(argv), W)</code>, for all <code>argv</code> and all <code>W</code></th></tr>
+<tr><td>R3</td><td>a usage error ⇒ the trace contains no GET and no POST</td></tr>
+<tr><td>R15</td><td>the response is invalid ⇒ no output, no POST, exit 1</td></tr>
+<tr><td>R50</td><td>the trace contains a POST ⇔ a threshold was given ∧ the response is valid ∧ level ≥ threshold</td></tr>
+<tr><td>R52</td><td>every POST comes after an output</td></tr>
+<tr><td><strong>R62</strong></td><td>threshold given ∧ level ≥ threshold ∧ the POST failed ⇒ exit ≠ 0</td></tr>
+</table></div>
+<p>(<code>main</code> is the core's entry point: it takes the command line and returns the first
+step.)</p>
+<p>A world plays the part of a mock in a unit test. A test might use one mock that returns HTTP 500
+and check that the exit code is 1. A theorem "for every <code>W</code>" covers <em>every possible
+mock at once</em>: every status code, every response body, every clock reading, every combination.
+That's why requirements which Stage 1 could only tag as <strong>I</strong>nspected, such as R52
+("every POST comes after an output"), become <strong>P</strong>roved here. In the mostly-unprovable
+sketch from Idea 2, R52 was the order of two lines in the shell.</p>
+
+<h3>In Lean</h3>
+<p>Here's how it eventually looks in Lean, in the spec layer. <a href="05-reading-lean.html">Lesson 5</a>
+covers the syntax. For now: an <code>inductive</code> is a tagged union, <code>k</code> is the
+continuation (<code>next</code> above), and <code>Nat</code> is a non-negative whole number. The Lean
+names for <code>httpGet</code> and <code>httpPost</code> are <code>get</code> and
+<code>post</code>.</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Spec/Prog.lean:16-31">inductive Prog where
+  | done (exit : Nat)
+  | get (req : Request) (k : GetResult → Prog)
+  | zoneAt (t : Instant) (k : Zone → Prog)
+  | clock (k : Instant → Prog)
+  | out (s : String) (k : Prog)
+  | err (s : String) (k : Prog)
+  | post (req : Request) (k : PostResult → Prog)
+
+/-- Every possible environment. Each kind of question is asked at most once
+per run, so a function per question loses no generality. -/
+structure World where
+  get : Request → GetResult
+  zone : Instant → Zone
+  now : Instant
+  post : Request → PostResult</code></pre>
+<div class="box caveat"><span class="box-title">About the symbols</span>
+<p>Lean code really is written with Unicode symbols such as
+<code>→</code>, <code>∀</code>, <code>∧</code>, <code>≤</code> and <code>⟨ ⟩</code>. Lean's own standard
+library uses them tens of thousands of times, and Lean prints them in every goal and error message.
+Nobody types them from a character map: the official Lean extension for VS Code replaces a backslash
+abbreviation as you type, so <code>\to</code> becomes <code>→</code>, <code>\and</code> becomes
+<code>∧</code>, <code>\le</code> becomes <code>≤</code>, and <code>\&lt;</code> and <code>\&gt;</code>
+become <code>⟨</code> and <code>⟩</code>. Most of the symbols also have an ASCII spelling that Lean
+accepts, such as <code>-&gt;</code> for <code>→</code> and <code>forall</code> for <code>∀</code>, but
+you'll rarely see it in real Lean code.</p>
+</div>
+
+<p><code>Prog.run</code> is the mathematical executor. For each step, it feeds the world's answer to
+the continuation, records the event, and keeps going:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Spec/Prog.lean:43-52">/-- The meaning of a `Prog` in world `w`: the trace of events and the exit status. -/
+def Prog.run (p : Prog) (w : World) : List Event × Nat :=
+  match p with
+  | .done e =&gt; ([], e)
+  | .get r k =&gt; let x := (k (w.get r)).run w; (.get r :: x.1, x.2)
+  | .zoneAt t k =&gt; let x := (k (w.zone t)).run w; (.zone t :: x.1, x.2)
+  | .clock k =&gt; let x := (k w.now).run w; (.clock :: x.1, x.2)
+  | .out s k =&gt; let x := k.run w; (.out s :: x.1, x.2)
+  | .err s k =&gt; let x := k.run w; (.err s :: x.1, x.2)
+  | .post r k =&gt; let x := (k (w.post r)).run w; (.post r :: x.1, x.2)</code></pre>
+
+<figure class="diagram">
+<svg viewBox="0 0 860 300" role="img" aria-labelledby="arch-t arch-d">
+  <title id="arch-t">Pure core, two executors</title>
+  <desc id="arch-d">The pure core turns argv into a Prog. The shell in Main.lean runs it against the real world; Prog.run runs it against any mathematical world, which is what the theorems are about.</desc>
+  <defs><marker id="ah4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-arrowhead"/></marker></defs>
+  <rect class="d-box ok" x="10" y="90" width="250" height="110" rx="8"/>
+  <text class="d-bold" x="24" y="116">Pure core (proved)</text>
+  <text class="d-small" x="24" y="138">parseArgs · decode · select</text>
+  <text class="d-small" x="24" y="156">rounding · calendar · render</text>
+  <text class="d-small" x="24" y="180">main : argv → Prog</text>
+
+  <path class="d-line" d="M260,145 L330,145" marker-end="url(#ah4)"/>
+  <text class="d-small" x="268" y="136">a Prog value</text>
+
+  <rect class="d-box warn" x="340" y="20" width="230" height="100" rx="8"/>
+  <text class="d-bold" x="354" y="46">Main.lean: the shell</text>
+  <text class="d-small" x="354" y="68">trusted, ~80 lines</text>
+  <text class="d-small" x="354" y="86">one line per kind of step</text>
+  <text class="d-small" x="354" y="104">makes no decisions</text>
+
+  <rect class="d-box accent" x="340" y="170" width="230" height="100" rx="8"/>
+  <text class="d-bold" x="354" y="196">Prog.run (maths)</text>
+  <text class="d-small" x="354" y="218">against any World w</text>
+  <text class="d-small" x="354" y="236">gives a trace + exit code</text>
+
+  <path class="d-line" d="M330,145 L340,70" />
+  <path class="d-line" d="M330,145 L340,220" />
+
+  <path class="d-line" d="M570,70 L640,70" marker-end="url(#ah4)"/>
+  <rect class="d-box" x="650" y="20" width="200" height="100" rx="8"/>
+  <text class="d-text" x="664" y="46">curl → hydromet, ntfy</text>
+  <text class="d-text" x="664" y="68">system clock</text>
+  <text class="d-text" x="664" y="90">tz database</text>
+  <text class="d-text" x="664" y="112">stdout / stderr</text>
+
+  <path class="d-line" d="M570,220 L640,220" marker-end="url(#ah4)"/>
+  <rect class="d-box ok" x="650" y="170" width="200" height="100" rx="8"/>
+  <text class="d-bold" x="664" y="196">Theorems</text>
+  <text class="d-small" x="664" y="218">∀ argv, ∀ w, …</text>
+  <text class="d-small" x="664" y="236">checked by the kernel</text>
+</svg>
+<figcaption>The same <code>Prog</code> can be run by two executors. <code>Main.lean</code> runs it
+against the real world. <code>Prog.run</code> runs it against any mathematical world, and that's the
+one the theorems are about, for every world. The shell is the only part that touches reality, and
+it's what <a href="12-shell-and-tcb.html">Lesson 12</a> is about.</figcaption>
+</figure>
+
+<h2>The rest of the model</h2>
+<p><a data-gh="blob/stage-2/docs/02-formal-model.md" href="../../docs/02-formal-model.md"><code>docs/02-formal-model.md</code></a>
+also defines:</p>
+<ul class="compact">
+  <li><strong>Exact decimals</strong>: a pair ⟨<var>m</var>, <var>e</var>⟩ meaning
+  <var>m</var> / 10<sup><var>e</var></sup>. So 677.58 is ⟨67758, 2⟩. This happens to be exactly how
+  Lean's JSON parser stores numbers, so nothing is ever converted to binary floating point.</li>
+  <li><strong>Time</strong>: civil dates, instants as seconds since 1970, the timestamp
+  round trip, and the 12-hour clock.</li>
+  <li><strong>Valid responses</strong> and the declarative <strong>latest reading</strong>.</li>
+  <li><strong>What the model leaves out on purpose</strong>: the JSON parser, curl, the time-zone
+  database, the clock, the compiler, and Lean's kernel. Writing that list down at this stage,
+  before any code, is what makes Stage 6's list of assumptions possible.</li>
+</ul>
+
+<div class="box process"><span class="box-title">Process note</span>
+<p>The model is in maths notation first, not Lean, on purpose. The three design decisions (spec
+independence, a pure core, the computation as a value) are easier to argue about on paper than in
+code. They also turn out to be the decisions everything later depends on. The whole-tool theorems
+of <a href="08-reading-a-proof.html">Lesson 8</a> exist only because <code>Prog</code> is decided
+here.</p>
+</div>
+
+<div class="box try"><span class="box-title">Try it</span>
+<p>Pick a function in your codebase that does I/O and makes a decision (retries, alerting,
+failover). Write it as a chain of steps: what questions does it ask the world, and what
+does it do with each answer? Then write down one property that should hold for <em>every</em>
+possible sequence of answers.</p>
+</div>
+
+<nav class="pager">
+  <a class="prev" href="03-requirements.html"><span class="label">← Previous</span>Requirements</a>
+  <a class="next" href="05-reading-lean.html"><span class="label">Next →</span>Reading Lean, for C++ programmers</a>
+</nav>
+</main>
+</body>
+</html>

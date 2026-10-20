@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where Is the Program?</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 11</p>
+<h1>Where is the actual program?</h1>
+<p class="lede">If you browse the repository, you'll find Lean files, Markdown, and some shell and
+Python under <code>test/</code>, but nothing that looks like the program itself. That's because the
+Lean files <em>are</em> the program. This lesson shows how they become a native executable, and
+what happens to the proofs.</p>
+
+<h2>The short answer</h2>
+<ul>
+  <li><strong>The source</strong> is <a data-gh="tree/stage-6/LakeLevel/Impl"><code>LakeLevel/Impl/*.lean</code></a>
+  (the logic, about 450 lines) and <a data-gh="blob/stage-6/Main.lean" href="../../Main.lean"><code>Main.lean</code></a>
+  (the I/O, 80 lines). Lean 4 is a general-purpose compiled language, not only a prover.</li>
+  <li><strong>The build</strong> is <code>lake build</code>. Lake is Lean's build tool: think CMake and
+  a package manager in one.</li>
+  <li><strong>The binary</strong> is <code>.lake/build/bin/lake-level</code>, a native ELF executable.
+  It's not in git for the same reason your <code>build/</code> directory isn't:
+  <a data-gh="blob/stage-6/.gitignore" href="../../.gitignore"><code>.gitignore</code></a> lists
+  <code>.lake/</code>.</li>
+</ul>
+<pre class="output"><code>$ file .lake/build/bin/lake-level
+.lake/build/bin/lake-level: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 2.6.32, with debug_info, not stripped
+$ .lake/build/bin/lake-level --threshold nan
+Error: --threshold must be a decimal number like 685 or 680.5: nan
+usage: lake-level [--site N] [--type T] [--json] [--threshold FT] [--ntfy-topic TOPIC]
+$ echo $?
+2</code></pre>
+
+<h2>The build file</h2>
+<pre><code data-src="stage-6:lakefile.toml:1-14">name = "lake-level"
+version = "0.1.0"
+defaultTargets = ["LakeLevel", "Tests", "lake-level"]
+
+[[lean_lib]]
+name = "LakeLevel"
+
+[[lean_lib]]
+name = "Tests"
+srcDir = "test"
+
+[[lean_exe]]
+name = "lake-level"
+root = "Main"</code></pre>
+<div class="box cpp"><span class="box-title">C++ analogy</span>
+<p><code>lean_lib</code> is <code>add_library</code> and <code>lean_exe</code> is
+<code>add_executable</code>. The <code>LakeLevel</code> library is everything under
+<code>LakeLevel/</code>: spec, implementation and proofs. <code>Tests</code> is a library that
+produces nothing useful. Building it runs its <code>#guard</code> and <code>#eval</code> checks, which
+is its only purpose. The executable's root is <code>Main.lean</code>, whose last line is the
+equivalent of <code>int main(int argc, char** argv)</code>:</p>
+</div>
+<pre><code class="lean" data-src="stage-6:Main.lean:80-80">def main (args : List String) : IO UInt32 := interp (LakeLevel.main args)</code></pre>
+<p>"Build the verified <code>Prog</code> from the arguments, then interpret it with real I/O, and
+return its exit status." Everything else in the program is reached from that line.</p>
+
+<h2>From <code>.lean</code> to a native binary</h2>
+<figure class="diagram">
+<svg viewBox="0 0 860 330" role="img" aria-labelledby="pipe-t pipe-d">
+  <title id="pipe-t">The build pipeline</title>
+  <desc id="pipe-d">Each .lean file is elaborated, then every declaration is checked by the kernel. The outputs are an .olean file holding definitions and proofs, and a .c file holding only executable code. The C is compiled by the bundled clang and linked with Lean's runtime and libraries into the executable.</desc>
+  <defs><marker id="ah11" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-arrowhead"/></marker></defs>
+  <rect class="d-box" x="10" y="120" width="120" height="60" rx="6"/>
+  <text class="d-bold" x="24" y="146">Select.lean</text>
+  <text class="d-small" x="24" y="166">source</text>
+  <path class="d-line" d="M130,150 L160,150" marker-end="url(#ah11)"/>
+
+  <rect class="d-box accent" x="165" y="100" width="170" height="100" rx="6"/>
+  <text class="d-bold" x="179" y="126">lean (elaborator)</text>
+  <text class="d-small" x="179" y="146">parse, infer types,</text>
+  <text class="d-small" x="179" y="162">run tactics, #guard / #eval</text>
+  <text class="d-small" x="179" y="186">every declaration →</text>
+  <path class="d-line" d="M335,150 L365,150" marker-end="url(#ah11)"/>
+
+  <rect class="d-box ok" x="370" y="100" width="130" height="100" rx="6"/>
+  <text class="d-bold" x="384" y="126">kernel</text>
+  <text class="d-small" x="384" y="146">checks each</text>
+  <text class="d-small" x="384" y="162">definition and</text>
+  <text class="d-small" x="384" y="178">proof term</text>
+
+  <path class="d-line" d="M500,130 L560,60" marker-end="url(#ah11)"/>
+  <path class="d-line" d="M500,170 L560,240" marker-end="url(#ah11)"/>
+
+  <rect class="d-box note" x="565" y="20" width="285" height="70" rx="6"/>
+  <text class="d-bold" x="579" y="46">Select.olean</text>
+  <text class="d-small" x="579" y="66">definitions + proofs, for importing</text>
+  <text class="d-small" x="579" y="82">(like a precompiled module)</text>
+
+  <rect class="d-box warn" x="565" y="205" width="130" height="70" rx="6"/>
+  <text class="d-bold" x="579" y="231">Select.c</text>
+  <text class="d-small" x="579" y="251">code only:</text>
+  <text class="d-small" x="579" y="267">no proofs</text>
+  <path class="d-line" d="M695,240 L720,240" marker-end="url(#ah11)"/>
+  <rect class="d-box" x="725" y="205" width="125" height="70" rx="6"/>
+  <text class="d-bold" x="739" y="231">clang, lld</text>
+  <text class="d-small" x="739" y="251">+ Lean runtime</text>
+  <text class="d-small" x="739" y="267">→ lake-level</text>
+</svg>
+<figcaption>One module's path through the build. The proofs go into <code>.olean</code> files
+(where other modules, and the audit, can see them) and never into the C.</figcaption>
+</figure>
+<ol>
+  <li><strong>Elaboration.</strong> <code>lean</code> reads the file, works out every type, and runs
+  the tactics, which build proof terms. <code>#guard</code> and <code>#eval</code> commands run here,
+  which is why tests can fail the build.</li>
+  <li><strong>Kernel check.</strong> Every definition and every proof term is checked by the kernel
+  before it's accepted. A proof that doesn't check is a compile error.</li>
+  <li><strong>Outputs.</strong> An <code>.olean</code> file (the compiled module, which other files
+  <code>import</code>) and a <code>.c</code> file (the executable code), both under
+  <code>.lake/build/</code>.</li>
+  <li><strong>C compilation and linking.</strong> The toolchain ships its own <code>clang</code> and
+  <code>ld.lld</code> (look in <code>~/.elan/toolchains/*/bin/</code>). Lake compiles each
+  <code>.c</code> and links the objects with Lean's runtime and standard libraries.</li>
+</ol>
+
+<h2>Read the generated C</h2>
+<p>The C is readable, if verbose. Here's what <code>select</code> (the fold that keeps the first of
+the latest readings) became, from <code>.lake/build/ir/LakeLevel/Impl/Select.c</code>
+after a build (verbatim):</p>
+<pre class="output"><code>LEAN_EXPORT lean_object* lp_lake_x2dlevel_List_foldl___at___00LakeLevel_select_spec__0(lean_object* v_x_1_, lean_object* v_x_2_){
+_start:
+{
+if (lean_obj_tag(v_x_2_) == 0)
+{
+lean_inc_ref(v_x_1_);
+return v_x_1_;
+}
+else
+{
+lean_object* v_head_3_; lean_object* v_tail_4_; lean_object* v_t_5_; lean_object* v_t_6_; uint8_t v___x_7_;
+v_head_3_ = lean_ctor_get(v_x_2_, 0);
+v_tail_4_ = lean_ctor_get(v_x_2_, 1);
+v_t_5_ = lean_ctor_get(v_x_1_, 0);
+v_t_6_ = lean_ctor_get(v_head_3_, 0);
+v___x_7_ = lean_int_dec_lt(v_t_5_, v_t_6_);
+if (v___x_7_ == 0)
+{
+v_x_2_ = v_tail_4_;
+goto _start;
+}
+else
+{
+v_x_1_ = v_head_3_;
+v_x_2_ = v_tail_4_;
+goto _start;
+}
+}
+}
+}</code></pre>
+<p>Things to notice:</p>
+<ul>
+  <li><code>lean_obj_tag(v_x_2_) == 0</code> is "is the list empty?", because constructor number 0
+  of <code>List</code> is <code>[]</code>.</li>
+  <li><code>lean_ctor_get(v_x_1_, 0)</code> reads field 0 of a <code>Reading</code>, its timestamp
+  <code>t</code>.</li>
+  <li><code>lean_int_dec_lt</code> is the strict <code>&lt;</code> on arbitrary-precision integers.
+  This one function call is the "first of the tied readings wins" behavior the proof is about. Change
+  it to <code>≤</code> in the Lean and this becomes <code>lean_int_dec_le</code>, and a proof breaks
+  (<a href="10-planted-bugs.html">Lesson 10</a>).</li>
+  <li>The recursion became <code>goto _start</code>: a loop. Tail calls are compiled to jumps, so
+  folding a long list doesn't grow the stack.</li>
+  <li><code>lean_inc_ref</code> and <code>lean_dec</code> are reference counting. Lean's memory
+  management is reference counting (like <code>std::shared_ptr</code>), not a tracing garbage
+  collector.</li>
+</ul>
+
+<h2>Where do the proofs go?</h2>
+<p>They don't go into the binary. A theorem's proof has no run-time behavior; once the kernel has
+accepted it, there's nothing to execute. You can check by looking for symbols:</p>
+<pre class="output"><code>$ nm .lake/build/bin/lake-level | grep -c never_silently_fails
+0
+$ nm .lake/build/bin/lake-level | grep -E 'LakeLevel_(select|decode|main)$'
+0000000000b454f0 T lp_lake_x2dlevel_LakeLevel_decode
+0000000000b4ba30 T lp_lake_x2dlevel_LakeLevel_main
+0000000000b43d10 T lp_lake_x2dlevel_LakeLevel_select</code></pre>
+<p>The proofs live in the <code>.olean</code> files, where the audit and other modules can see them.
+They can be large: <code>Proofs/CalendarLemmas.olean</code> is about 12.7 MB, against 25 KB for
+<code>Impl/Select.olean</code>. The proof files do produce some C (helper <em>definitions</em> such as
+<code>yoeOf</code>, and functions Lean generates to support reasoning about pattern matches), but
+the linker drops it from the binary because nothing calls it.</p>
+<div class="box cpp"><span class="box-title">C++ analogy</span>
+<p>Proofs are like <code>static_assert</code>s and concepts: they're checked at compile time and
+cost nothing at run time. The difference is in what they can say. <code>static_assert</code> checks one constant
+expression. A theorem checks a claim about every possible input.</p>
+</div>
+
+<h2>Why is the binary 118 MB?</h2>
+<p>It's large, for a program that does so little:</p>
+<pre class="output"><code>$ ls -l .lake/build/bin/lake-level
+-rwxrwxr-x 1 … 118752352 … .lake/build/bin/lake-level
+$ strip -o /tmp/ll .lake/build/bin/lake-level &amp;&amp; ls -l /tmp/ll
+-rwxrwxr-x 1 … 78928984 … /tmp/ll</code></pre>
+<p>About a third is symbols and debug information, which <code>strip</code> removes. The rest is mostly Lean's own libraries, linked
+statically. The JSON parser this program uses lives in the <code>Lean</code> package, which is
+the compiler's own library (its static archive, <code>libLean.a</code>, is about 312 MB in this
+toolchain). The link line includes <code>-lLean -lStd -lInit -lleanrt</code>, plus
+<code>-lgmp</code> (GMP, for big integers) and <code>-luv</code>. The only shared libraries at run
+time are the C library's:</p>
+<pre class="output"><code>$ ldd .lake/build/bin/lake-level
+	linux-vdso.so.1
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6
+	/lib64/ld-linux-x86-64.so.2
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0
+	libdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2
+	librt.so.1 => /lib/x86_64-linux-gnu/librt.so.1
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6</code></pre>
+<p>(Load addresses removed.) At run time it also needs the <code>curl</code> program, which it
+starts as a child process for HTTP, and the system time-zone database. Writing a small JSON parser
+inside the project would shrink the binary a lot, and would also move the JSON parser out of the
+trusted base and into the verified code. It wasn't done because it's a lot of proof for a project this size.</p>
+
+<h2>Isn't it strange that the language is also the prover?</h2>
+<p>It's the main reason Lean was chosen. In many verification setups, the thing you verify is a
+<em>model</em> of the program: a TLA+ spec of a protocol, say, which you then re-implement in
+C++ and hope the two match. Here there's no gap of that kind. The <code>select</code> in the
+theorem is the <code>select</code> in the binary.</p>
+<p>There is still one gap, and it's important to be clear about it. The kernel checks the
+definitions. The <strong>compiler</strong> translates those same definitions to C, separately, and
+the compiler isn't verified. If it miscompiled <code>select</code>, the proofs would still be right
+about the definition, and the binary would be wrong. That's row 2 of the trusted base in
+<a href="12-shell-and-tcb.html">Lesson 12</a>, covered by tests that run the real binary rather
+than by proof. (Lean also has ways to swap in a different run-time implementation for a definition,
+via attributes like <code>@[implemented_by]</code> and <code>@[extern]</code>. A search confirms this
+repository uses neither.)</p>
+
+<div class="box try"><span class="box-title">Try it</span>
+<p>After a build, open <code>.lake/build/ir/LakeLevel/Impl/Decimal.c</code> and find
+<code>roundFrac</code>. Match each line of the Lean source to the C. Then open
+<code>.lake/build/ir/LakeLevel/Proofs/Decimal.c</code>, the C for a file that contains only
+theorems, and see how little is in it.</p>
+</div>
+
+<nav class="pager">
+  <a class="prev" href="10-planted-bugs.html"><span class="label">← Previous</span>Planted bugs</a>
+  <a class="next" href="12-shell-and-tcb.html"><span class="label">Next →</span>The shell and the trusted base</a>
+</nav>
+</main>
+</body>
+</html>

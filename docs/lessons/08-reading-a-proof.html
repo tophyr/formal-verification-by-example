@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anatomy of a Proof</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 8 · Stage 5</p>
+<h1>Anatomy of a proof</h1>
+<p class="lede">This lesson walks through the most important theorem in the project, "it never
+silently fails to alert", one tactic at a time, with the goal Lean displays at each step. Then it
+runs the same proof against a deliberately broken implementation.</p>
+
+<div class="stage-links">
+  <strong>Stage 5</strong>
+  <a data-gh="commit/d570d87">commit d570d87</a>
+  <a data-gh="compare/stage-4...stage-5">what changed since stage-4</a>
+  <a data-gh="blob/stage-6/LakeLevel/Proofs/Program.lean" href="../../LakeLevel/Proofs/Program.lean">LakeLevel/Proofs/Program.lean</a>
+  <a data-gh="blob/stage-5/docs/05-proofs.md" href="../../docs/05-proofs.md">docs/05-proofs.md</a>
+</div>
+
+<h2>The vocabulary</h2>
+<p>The theorem is stated in terms of a few definitions in the proofs file. They're the
+vocabulary of "what the world did":</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Proofs/Program.lean:18-25">/-- The world returned a successful, valid response for `cfg`, decoding to `S`, `R`. -/
+def Fetched (cfg : Cfg) (w : World) (S : Site) (R : Reading) : Prop :=
+  ∃ status body, w.get (fetchReq cfg) = .response status body ∧ ok2xx status ∧
+    decodeBody (siteNum cfg.site) body = .ok (S, R)
+
+/-- The alert condition (R50): a threshold was given and the exact level meets it. -/
+def ShouldAlert (cfg : Cfg) (R : Reading) : Prop :=
+  ∃ th, cfg.threshold = some th ∧ th.value.val ≤ R.level.val</code></pre>
+<p>Notice that <code>ShouldAlert</code> compares <code>.val</code>, the exact rational values from
+the <em>spec</em>, not the implementation's <code>Dec.le</code>. So somewhere the proof has to
+use the fact that <code>Dec.le</code> is correct. That's how proofs compose: the whole-program
+theorem relies on the decimal theorem.</p>
+<p><code>Delivered w q</code>, from <a href="05-reading-lean.html">Lesson 5</a>, means "the world
+answered POST <code>q</code> with a 2xx status".</p>
+
+<h2>The plan, in English</h2>
+<p>Before any Lean, here's the argument a person would give:</p>
+<ol>
+  <li>Every run with a valid command line has one of two shapes. Either nothing valid was
+  fetched, in which case it printed one error and exited 1, or it fetched something, printed the
+  report, and then did whatever the alert step (<code>finish</code>) does. (This is a separate
+  lemma, <code>run_ok_cases</code>.)</li>
+  <li>We're told something valid <em>was</em> fetched, so it's the second shape.</li>
+  <li>The world's answer to the GET is fixed, so what was fetched is the reading we were told
+  about. (Another small lemma: <code>Fetched.unique</code>.)</li>
+  <li>So the program's exit status is <code>finish</code>'s exit status, and we're told it's 0.</li>
+  <li><code>finish</code> exits 0 with an alert due only if the POST came back 2xx. (Lemma:
+  <code>finish_exit0</code>.)</li>
+</ol>
+<p>The Lean proof is that argument, nearly line for line.</p>
+
+<h2>The proof</h2>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Proofs/Program.lean:336-348">/-- **R62: "it should never silently fail to alert."** If the run exits 0 and
+the alert condition held, the alert was delivered. -/
+theorem never_silently_fails (argv : List String) (w : World) (cfg : Cfg) (S : Site) (R : Reading)
+    (h : parseArgs argv = .ok cfg) (hf : Fetched cfg w S R) (ha : ShouldAlert cfg R)
+    (h0 : exitCode argv w = 0) :
+    Delivered w (alertReq cfg S R) := by
+  unfold exitCode at h0
+  rcases run_ok_cases argv w cfg h with ⟨hn, -⟩ | ⟨S', R', hF, hr⟩
+  · exact absurd ⟨S, R, hf⟩ hn
+  · obtain ⟨rfl, rfl⟩ := Fetched.unique hF hf
+    rw [hr] at h0
+    obtain ⟨th, hth, hle⟩ := ha
+    exact finish_exit0 cfg S' R' w th hth ((Dec.le_iff _ _).2 hle) h0</code></pre>
+
+<h2>Step by step</h2>
+<p>The goal states below are Lean's real output, captured by inserting
+<code>trace_state</code> between the tactics of a copy of this proof. Hypotheses are above the
+line; the goal is after <code>⊢</code>.</p>
+
+<h3>At the start</h3>
+<pre class="output"><code class="goal">argv : List String
+w : World
+cfg : Cfg
+S : Site
+R : Reading
+h : parseArgs argv = ArgResult.ok cfg
+hf : Fetched cfg w S R
+ha : ShouldAlert cfg R
+h0 : exitCode argv w = 0
+⊢ Delivered w (alertReq cfg S R)</code></pre>
+<p>The parameters became hypotheses. We have to produce evidence of <code>Delivered</code>.</p>
+
+<h3><code>unfold exitCode at h0</code></h3>
+<pre class="output"><code class="goal">h0 : ((main argv).run w).snd = 0</code></pre>
+<p>(Only the changed line is shown.) <code>exitCode</code> was shorthand for "the second
+component of running <code>main</code> in <code>w</code>". Now it's spelled out, so later steps can
+rewrite inside it.</p>
+
+<h3><code>rcases run_ok_cases argv w cfg h with ⟨hn, -⟩ | ⟨S', R', hF, hr⟩</code></h3>
+<p>Use the shape lemma, and split on its "or". This creates two goals, one per shape. The first
+is the "nothing valid was fetched" case:</p>
+<pre class="output"><code class="goal">case inl
+⋮ (as before)
+hn : ¬∃ S R, Fetched cfg w S R
+⊢ Delivered w (alertReq cfg S R)</code></pre>
+<p>Here <code>hn</code> says nothing was fetched, but <code>hf</code> says <code>S</code> and
+<code>R</code> were. Those contradict each other. <code>exact absurd ⟨S, R, hf⟩ hn</code> says
+exactly that: "here's a witness that something was fetched, and here's <code>hn</code> denying it;
+from a contradiction, anything follows". That closes the first goal.</p>
+<div class="box cpp"><span class="box-title">C++ analogy</span>
+<p>It's an unreachable branch. In C++ you'd write <code>std::unreachable()</code> and hope. Here
+you have to <em>prove</em> it's unreachable, and <code>absurd</code> is how you do it: show that
+two things you hold contradict each other.</p>
+</div>
+
+<h3>The second shape: <code>obtain ⟨rfl, rfl⟩ := Fetched.unique hF hf</code></h3>
+<p>In the second case, the shape lemma gives us <em>some</em> fetched <code>S'</code> and
+<code>R'</code>, and an equation <code>hr</code> for the entire run. <code>Fetched.unique</code> says
+they must be our <code>S</code> and <code>R</code>. Matching its result against <code>rfl</code>
+("these are literally equal") makes Lean substitute one for the other everywhere:</p>
+<pre class="output"><code class="goal">case inr
+argv : List String
+w : World
+cfg : Cfg
+h : parseArgs argv = ArgResult.ok cfg
+h0 : ((main argv).run w).snd = 0
+S' : Site
+R' : Reading
+hF : Fetched cfg w S' R'
+hr :
+  (main argv).run w =
+    (Event.get (fetchReq cfg) :: preReport cfg R' ++
+        Event.out (reportFor cfg w S' R') :: ((finish cfg S' R').run w).fst,
+      ((finish cfg S' R').run w).snd)
+ha : ShouldAlert cfg R'
+hf : Fetched cfg w S' R'
+⊢ Delivered w (alertReq cfg S' R')</code></pre>
+<p><code>hr</code> is the whole run, written out: the GET, then the zone/clock queries
+(<code>preReport</code>), then the report, then whatever <code>finish</code> does. The exit status
+is <code>finish</code>'s.</p>
+
+<h3><code>rw [hr] at h0</code></h3>
+<pre class="output"><code class="goal">h0 :
+  (Event.get (fetchReq cfg) :: preReport cfg R' ++ Event.out (reportFor cfg w S' R') :: ((finish cfg S' R').run w).fst,
+        ((finish cfg S' R').run w).snd).snd =
+    0</code></pre>
+<p>Rewrite <code>h0</code> using <code>hr</code>. It now says "the second component of that pair is
+0", which Lean can see means <code>((finish cfg S' R').run w).snd = 0</code>.</p>
+
+<h3><code>obtain ⟨th, hth, hle⟩ := ha</code></h3>
+<pre class="output"><code class="goal">th : Threshold
+hth : cfg.threshold = some th
+hle : th.value.val ≤ R'.level.val
+⊢ Delivered w (alertReq cfg S' R')</code></pre>
+<p>Unpack "an alert should be sent" into its parts: the threshold <code>th</code>, the fact that the
+configuration has it, and the exact comparison.</p>
+
+<h3><code>exact finish_exit0 cfg S' R' w th hth ((Dec.le_iff _ _).2 hle) h0</code></h3>
+<p>Call the lemma about <code>finish</code>, handing it everything it needs. One argument is
+interesting: <code>finish_exit0</code> is about the code, so it wants <code>Dec.le … = true</code>, but
+we have <code>hle</code>, a statement about rationals. <code>(Dec.le_iff _ _).2 hle</code> converts
+one into the other, using the "right-to-left" direction (<code>.2</code>) of the decimal theorem.
+No goals remain. The theorem is proved.</p>
+
+<h2>Where the real work is: <code>finish_exit0</code></h2>
+<p>That last step pushed all the substance into a lemma about the alert step:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Proofs/Program.lean:127-137">theorem finish_exit0 (th : Threshold) (hth : cfg.threshold = some th)
+    (hle : Dec.le th.value R.level = true) (h0 : ((finish cfg S R).run w).2 = 0) :
+    Delivered w (alertReq cfg S R) := by
+  simp only [finish, hth, hle, ite_true] at h0
+  cases hp : w.post (alertReq cfg S R) with
+  | response st =>
+    simp only [Prog.run, hp] at h0
+    by_cases hs : ok2xx st
+    · exact ⟨st, hp, hs⟩
+    · simp [Prog.run, hs] at h0
+  | failed m => simp [Prog.run, hp] at h0</code></pre>
+<p>It's a case analysis on what the world answered to the POST:</p>
+<ul>
+  <li><strong>A 2xx status.</strong> Then <code>⟨st, hp, hs⟩</code> is literally the evidence
+  <code>Delivered</code> asks for: a status, the fact that the world answered with it, and the fact that
+  it's 2xx.</li>
+  <li><strong>Any other status.</strong> <code>simp</code> evaluates the program: in that branch
+  <code>finish</code> exits 1. So <code>h0</code> becomes <code>1 = 0</code>, which is false, and a
+  false hypothesis closes any goal.</li>
+  <li><strong>A transport failure.</strong> Same: exit 1, so <code>h0</code> is <code>1 = 0</code>.</li>
+</ul>
+<p>The proof doesn't enumerate status codes. "Any other status" is one case, covering 0, 199,
+302, 500 and 4,294,967,296 at once.</p>
+
+<h2>What it looks like when the code is wrong</h2>
+<p>Now plant the bug the whole PRD was worried about. In <code>finish</code>, change the exit status
+after an HTTP error from 1 to 0:</p>
+<pre><code>-          else .err (errLine (sanitize s!"ntfy alert failed: HTTP {st}")) (.done 1)
++          else .err (errLine (sanitize s!"ntfy alert failed: HTTP {st}")) (.done 0)</code></pre>
+<p>Every test that doesn't specifically check an HTTP error status would still pass. Here's what
+<code>lake build</code> says:</p>
+<pre class="output fail"><code>error: LakeLevel/Proofs/Program.lean:136:4: unsolved goals
+case neg
+cfg : Cfg
+S : Site
+R : Reading
+w : World
+th : Threshold
+hth : cfg.threshold = some th
+hle : th.value.le R.level = true
+st : Nat
+hp : w.post (alertReq cfg S R) = PostResult.response st
+hs : ¬ok2xx st
+h0 : True
+⊢ Delivered w (alertReq cfg S R)
+Some required targets logged failures:
+- LakeLevel.Proofs.Program
+error: build failed</code></pre>
+<p>Read the stuck goal as a counterexample. The world answered the POST with some status
+<code>st</code> that is <em>not</em> 2xx (<code>hs</code>). The exit status was 0: <code>h0</code> has
+become trivially <code>True</code>, so it's no longer a contradiction. And we're asked to show that
+the alert was delivered, which is false. Lean is telling you: "here's a situation where your program
+exits 0 and the alert wasn't delivered". It points at line 136, the "not 2xx" branch.</p>
+<p>And because the binary imports the proofs, <strong>the broken program doesn't build</strong>.
+You can't ship it by accident.</p>
+
+<h2>The rest of the whole-program theorems</h2>
+<p>All in <a data-gh="blob/stage-6/LakeLevel/Proofs/Program.lean" href="../../LakeLevel/Proofs/Program.lean"><code>Proofs/Program.lean</code></a>,
+and all for every command line and every world:</p>
+<div class="table-wrap"><table>
+<tr><th>Theorem</th><th>Says</th></tr>
+<tr><td><code>alert_iff</code></td><td>an alert is attempted <em>if and only if</em> something valid was fetched and the alert condition holds (R50)</td></tr>
+<tr><td><code>alert_content</code></td><td>the alert sent is exactly <code>alertReq cfg S R</code> (R51)</td></tr>
+<tr><td><code>report_before_alert</code></td><td>in the trace, the report always comes before the POST (R52)</td></tr>
+<tr><td><code>bad_fetch_behavior</code></td><td>if nothing valid was fetched: no output, no alert, exit 1 (R15)</td></tr>
+<tr><td><code>usage_behavior</code></td><td>a usage error makes no network request and exits 2 (R3)</td></tr>
+<tr><td><code>only_fetch_get</code></td><td>the only GET is the fetch request (R4)</td></tr>
+<tr><td><code>report_written</code></td><td>on a good fetch, the report is the only thing written to stdout</td></tr>
+<tr><td><code>stderr_shape</code></td><td>every stderr write is a one-line <code>Error:</code> message, or the alert notice (R60)</td></tr>
+<tr><td><code>exit_codes</code></td><td>the exit status is 0, 1 or 2, and 2 exactly for usage errors (R61)</td></tr>
+<tr><td><code>succeeds_when_it_should</code></td><td>the converse of the headline theorem: a good fetch with no alert needed, or with the alert delivered, exits 0</td></tr>
+</table></div>
+<p>The last one matters as much as the headline theorem. A program that always exits 1 would
+satisfy <code>never_silently_fails</code> trivially, because it never exits 0 at all. Proving the converse
+rules that out.</p>
+
+<div class="box try"><span class="box-title">Try it</span>
+<p>Read <code>report_before_alert</code> and the small helper <code>NoPostBeforeOut</code> just above it.
+<code>NoPostBeforeOut</code> is a recursive function that returns a <em>proposition</em>: it walks
+the trace and becomes <code>False</code> if it meets a POST before any output. Work out why the
+theorem's statement (with <code>pre ++ Event.post q :: post</code>) says the same thing as R52.</p>
+</div>
+
+<nav class="pager">
+  <a class="prev" href="07-implementation.html"><span class="label">← Previous</span>An implementation that passes its tests</a>
+  <a class="next" href="09-proof-techniques.html"><span class="label">Next →</span>How the hard proofs got done</a>
+</nav>
+</main>
+</body>
+</html>

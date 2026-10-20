@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Planted Bugs</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 10</p>
+<h1>Planted bugs: checking the checkers</h1>
+<p class="lede">Every check in this project was itself checked: the tests, the proofs, the shell
+tests, the audit, and the script that checks these lessons. The method is to ask "could this pass
+while being wrong?", then plant a bug and see whether it does.</p>
+
+<p>This is called <strong>mutation testing</strong>: make a small, plausible change to the thing
+being checked, and require that the check fails. A check that can't fail tells you nothing, but
+it still makes you feel safe. The project applied this at six levels.</p>
+
+<h2>Level 1: the tests</h2>
+<p>Covered in <a href="07-implementation.html">Lesson 7</a>. Four planted bugs in the
+implementation (tie-breaking, rounding direction, midnight as <code>00</code>, any status ≥ 200
+counted as success), each caught by a compile-time test.</p>
+
+<h2>Level 2: the proofs</h2>
+<p>A proof that still goes through with a broken implementation isn't checking anything. So the
+same experiment was run against the proofs, with one rule: build <strong>only the proof library</strong>
+(<code>lake build LakeLevel</code>), not the tests, so the tests can't be the thing that catches it.</p>
+<div class="table-wrap"><table>
+<tr><th>Planted bug</th><th>Proof that broke</th><th>Would Stage 4's tests catch it?</th></tr>
+<tr><td><code>select</code> keeps the <em>last</em> of tied readings</td><td><code>Proofs/Select.lean</code></td><td class="yes">yes</td></tr>
+<tr><td>rounding ties toward zero</td><td><code>Proofs/DecimalLemmas.lean</code></td><td class="yes">yes</td></tr>
+<tr><td>midnight shown as <code>00 AM</code></td><td><code>Proofs/Calendar.lean</code></td><td class="yes">yes</td></tr>
+<tr><td>exit 0 when ntfy returns an HTTP error</td><td><code>Proofs/Program.lean</code> (R62)</td><td class="yes">yes</td></tr>
+<tr><td>calendar off by one day</td><td><code>Proofs/CalendarLemmas.lean</code></td><td class="yes">yes</td></tr>
+<tr><td><code>--site</code> allowed twice</td><td><code>Proofs/Args.lean</code></td><td class="yes">yes</td></tr>
+<tr><td>reject responses that lack <code>siteNumber</code></td><td><code>Proofs/DecodeLemmas.lean</code></td><td class="no">no</td></tr>
+</table></div>
+<div class="box caveat"><span class="box-title">What planted bugs can't detect</span>
+<p>This experiment shows that the proofs depend on the code. It doesn't show that the specs are
+independent of it. If a spec were a copy of the implementation, planting a bug in the
+implementation would break the proof against it in just the same way. A copied spec passes this
+check (<a href="04-the-model.html">Lesson 4</a>).</p>
+</div>
+
+<p>The outputs below were re-run for this lesson, in a scratch copy of <code>stage-6</code>.</p>
+
+<h3>The one the tests missed</h3>
+<p>The ambiguity register (A10) says <code>siteNumber</code> is optional: if the response has one, it
+must match the requested site; if it doesn't, that's fine. Here's the code:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Impl/Decode.lean:47-54">/-- If present, `siteNumber` must equal the requested site (A10). -/
+def checkSite (site : Nat) (j : Json) : Except String Unit :=
+  match j.getObjVal? "siteNumber" with
+  | .ok (.num n) =>
+    if Dec.le (Dec.ofJson n) ⟨site, 0⟩ &amp;&amp; Dec.le ⟨site, 0⟩ (Dec.ofJson n) then .ok ()
+    else .error s!"response is for a different site than {site}"
+  | .ok _ => .error "response siteNumber is not a number"
+  | .error _ => .ok ()</code></pre>
+<p>Now plant a bug. It's a cautious-sounding change: "reject the response if
+<code>siteNumber</code> is missing".</p>
+<pre><code>-  | .error _ => .ok ()
++  | .error _ => .error "response has no siteNumber"</code></pre>
+<p>At the time, the whole test suite passed with this bug in place. Every fixture happened to
+contain a <code>siteNumber</code>, because every fixture was derived from a real response, and real
+responses have one. The proof doesn't care what the fixtures contain:</p>
+<pre class="output fail"><code>✖ [23/27] Building LakeLevel.Proofs.DecodeLemmas (326ms)
+error: LakeLevel/Proofs/DecodeLemmas.lean:93:12: unsolved goals
+case error
+site : Nat
+j : Json
+e : String
+hj : j.getObjVal? "siteNumber" = Except.error e
+⊢ False
+Some required targets logged failures:
+- LakeLevel.Proofs.DecodeLemmas
+error: build failed</code></pre>
+<p>Read the stuck goal: "in the case where the response has no <code>siteNumber</code>
+(<code>hj</code>), prove <code>False</code>". The proof had reached the "siteNumber absent" case of the
+spec, where the spec says the check succeeds, and the code now says it fails. It can't reconcile
+them, and it tells you exactly which case is the problem. A fixture without <code>siteNumber</code>
+was then added, so the tests catch it too:</p>
+<pre><code class="lean" data-src="stage-6:test/Tests.lean:119-121">  -- A10: siteNumber is optional. (Added after a proof caught a mutant these tests missed:
+  -- every fixture had a siteNumber, so "reject when absent" passed the whole suite.)
+  check "no siteNumber is fine" ((← decodes "no-site-number") matches .ok _)</code></pre>
+<div class="box key"><span class="box-title">Why this matters</span>
+<p>A proof covers inputs that nobody thought to test. Here, that was a response shaped slightly
+differently from every real response we'd seen, which is the kind of thing that turns up in
+production a year later.</p>
+</div>
+
+<h3>When a proof breaks for a shallow reason</h3>
+<p>The tie-breaking mutation is instructive for a different reason. Change <code>&lt;</code> to
+<code>≤</code> in <code>select</code>, so that the <em>last</em> of several tied readings wins:</p>
+<pre><code>-  | r :: rest => some (rest.foldl (fun best x => if best.t &lt; x.t then x else best) r)
++  | r :: rest => some (rest.foldl (fun best x => if best.t ≤ x.t then x else best) r)</code></pre>
+<p>The first failure is shallow:</p>
+<pre class="output fail"><code>error: LakeLevel/Proofs/Select.lean:108:6: Type mismatch
+  hsel x l
+has type
+  Latest (x :: l) (List.foldl step x l)
+but is expected to have type
+  Latest (x :: l) (List.foldl (fun best x => if best.t ≤ x.t then x else best) x l)</code></pre>
+<p>The proof file has a private copy of the fold's step function, called <code>step</code>, and the
+mutant no longer matches it. That's a real failure, but not an informative one: it only says
+"this code isn't the code the proof was written for". So make the experiment fair and mutate the
+proof's copy too. Now the proof fails where the theorem is actually false:</p>
+<pre class="output fail"><code>error: LakeLevel/Proofs/Select.lean:48:33: unsolved goals
+x : Reading
+l : List Reading
+⋮
+h : ¬r.t &lt; x.t
+⊢ r.t ≤ x.t → x = r</code></pre>
+<p>(Hypotheses not needed for the point are elided.) We're in the case where <code>x</code> is not
+later than the current best <code>r</code>, and the goal says: if <code>x</code> is <em>at least as
+late</em> as <code>r</code> (so, exactly as late), then <code>x</code> must be <code>r</code>. That's false
+for two different readings with the same timestamp. The stuck goal <em>is</em> the counterexample:
+a tie.</p>
+
+<h3>Can the broken program still ship?</h3>
+<p>The executable imports the proof library (<a data-gh="blob/stage-6/Main.lean#L1" href="../../Main.lean"><code>Main.lean</code></a>
+starts with <code>import LakeLevel</code>, and <a data-gh="blob/stage-6/LakeLevel.lean" href="../../LakeLevel.lean"><code>LakeLevel.lean</code></a>
+imports every <code>Proofs</code> module). So with any of these mutations, <code>lake build lake-level</code>
+fails too. A bug that breaks a proof can't be built into the binary.</p>
+<div class="box caveat"><span class="box-title">Two qualifications</span>
+<ul>
+<li>A failed build doesn't delete the binary from the previous successful build; it just doesn't
+replace it. "Can't ship" means "can't produce", not "can't run an old copy".</li>
+<li>Breaking a proof stops the build. <strong>Deleting</strong> a proof doesn't. If someone
+removes a theorem that has become inconvenient, everything still compiles. That's what Level 5 is for.</li>
+</ul>
+</div>
+
+<h2>Level 3: the shell</h2>
+<p>The proofs can't see <a data-gh="blob/stage-6/Main.lean" href="../../Main.lean"><code>Main.lean</code></a>,
+the 80 lines of unverified code that do real I/O (<a href="12-shell-and-tcb.html">Lesson 12</a>). So
+it was mutated too, and the end-to-end tests had to catch each one:</p>
+<div class="table-wrap"><table>
+<tr><th>Mutation of <code>Main.lean</code></th><th>End-to-end checks that failed</th></tr>
+<tr><td>report every POST as HTTP 200</td><td>7 (including <code>HTTP 500 → exit 1</code>)</td></tr>
+<tr><td>write stderr to stdout</td><td>34</td></tr>
+<tr><td>drop <code>--max-time 30</code></td><td>4</td></tr>
+<tr><td>never print the report</td><td>5</td></tr>
+<tr><td>drop <code>--proto =https</code></td><td>4</td></tr>
+</table></div>
+<p>The first row is the important one. If the shell lied and reported every POST as delivered,
+<strong>every theorem would still be true</strong> (they're about what the world reports), and the
+tool would silently fail to alert. Only a test can catch that, so that exact mutation was tried.</p>
+
+<h2>Level 4: the test harness</h2>
+<p>The end-to-end test runs the real binary with a fake <code>curl</code> that logs each call into a
+file named like <code>0-GET.args</code> or <code>1-POST.args</code>. A helper counts calls of each kind.
+The first draft of that helper was:</p>
+<pre><code>calls() { find "$log" -name "*.$1" | wc -l; }</code></pre>
+<p>Called as <code>calls POST.args</code>, it searched for <code>*.POST.args</code>, which matches nothing,
+so it returned 0 every time. Every "no alert was sent" check in the suite passed, and would have
+kept passing even if the program sent alerts constantly. The fix is one character:</p>
+<pre><code data-src="stage-6:test/e2e.sh:28-28">calls() { find "$log" -name "*-$1" | wc -l; }</code></pre>
+<p>What found it was adding a <strong>positive control</strong>: a check, using the same counter, in a
+case where the answer must be 1. With the broken glob it read 0, and failed. Both counting expressions
+that the "zero" checks use now have one:</p>
+<pre><code data-src="stage-6:test/e2e.sh:63-64"># Positive control: proves calls() can count a POST, so the "no POST" checks below aren't vacuous.
+eq "one GET, one POST" "1 1" "$(calls GET.args) $(calls POST.args)"</code></pre>
+<div class="box cpp"><span class="box-title">C++ analogy</span>
+<p>The same failure in a C++ test suite looks like <code>EXPECT_EQ(mock.calls("send"), 0)</code>
+with a typo in the method name. It always passes. If a test asserts that something
+<em>didn't</em> happen, add a sibling test showing the same assertion notices when it <em>does</em>.</p>
+</div>
+
+<h2>Level 5: the audit</h2>
+<p>Two problems with the audit were found by the same question.</p>
+<ul>
+  <li><strong>It counted things that weren't ours.</strong> The first draft reported "87 proved"
+  with nothing proved, by counting lemmas Lean generates automatically
+  (<a href="06-the-spec.html">Lesson 6</a>). Fixed by counting only theorems in the
+  <code>Proofs</code> modules.</li>
+  <li><strong>It couldn't notice a missing theorem.</strong> It checked that every theorem it
+  found was proved. Delete a hard theorem, and there's nothing left to find. So the 48 obligation
+  names were frozen into <a data-gh="blob/stage-6/scripts/obligations.txt" href="../../scripts/obligations.txt"><code>scripts/obligations.txt</code></a>,
+  generated from the <code>stage-3</code> tag, and the audit requires every one of them:</li>
+</ul>
+<pre><code class="lean" data-src="stage-6:scripts/Audit.lean:55-58">  -- The obligations are frozen in scripts/obligations.txt (generated from tag stage-3).
+  -- Each must still exist, still be a theorem, and be fully proved: deleting or
+  -- weakening-by-removal a hard theorem cannot turn the audit green.
+  let names := (← IO.FS.lines "scripts/obligations.txt").filter (· ≠ "")</code></pre>
+<p>For the negative test, rename <code>never_silently_fails</code>, as if it had been deleted. The
+build still succeeds, but the audit fails:</p>
+<pre class="output fail"><code>$ lake build LakeLevel
+Build completed successfully (27 jobs).
+$ lake env lean scripts/Audit.lean
+theorems proved from standard axioms only: 139 (obligations + helper lemmas)
+obligations (scripts/obligations.txt) fully proved: 47/48
+OBLIGATIONS MISSING: [LakeLevel.never_silently_fails]
+theorems still depending on sorry: 0
+definitions still depending on sorry: 0
+scripts/Audit.lean:77:0: error: audit failed</code></pre>
+<div class="box process"><span class="box-title">Process note: a mistake made while writing this lesson</span>
+<p>The first attempt at that negative test also deleted the name from
+<code>obligations.txt</code>. The audit then reported <code>47/47</code> and passed. That isn't a bug
+in the audit, but it shows that the frozen list only protects you if changes to the list are
+themselves reviewed. In practice, that means a diff to <code>scripts/obligations.txt</code> in a pull
+request should get the same scrutiny as a diff that deletes a test file.</p>
+</div>
+
+<h2>Level 6: these lessons</h2>
+<p>The code excerpts on these pages are checked against the repository by
+<a data-gh="blob/main/scripts/check-lessons.py" href="../../scripts/check-lessons.py"><code>scripts/check-lessons.py</code></a>.
+Before trusting it, it was given two known-wrong excerpts (one with an extra trailing space, one
+with its line range shifted by one), and it reported both.</p>
+<p>One check didn't get a negative control, so it's reported here as unknown rather than as
+passed. The Lean toolchain ships with an independent proof re-checker, <code>leanchecker</code>.
+Running <code>lake env leanchecker LakeLevel</code> exits 0 in about 8 seconds, and it does fail on a
+nonexistent module. But no forged proof was built to show that it rejects a bad one, so that run
+is evidence of unknown strength.</p>
+
+<h2>Doing it yourself</h2>
+<pre><code>git worktree add ../mutant stage-6        # a scratch copy; your checkout stays clean
+cd ../mutant
+$EDITOR LakeLevel/Impl/Select.lean        # plant one bug
+lake build LakeLevel                      # proofs only: does a proof break?
+lake build Tests                          # do the tests catch it too?
+cd - &amp;&amp; git worktree remove --force ../mutant</code></pre>
+<div class="box try"><span class="box-title">Try it</span>
+<p>Find a mutation of the implementation that <em>no</em> proof catches. There are some: for
+example, change the wording of an error message. Then explain why it's fine for no proof to
+catch it (which requirement, if any, it violates), or write the theorem that would.</p>
+</div>
+
+<nav class="pager">
+  <a class="prev" href="09-proof-techniques.html"><span class="label">← Previous</span>How the hard proofs got done</a>
+  <a class="next" href="11-where-is-the-program.html"><span class="label">Next →</span>Where is the actual program?</a>
+</nav>
+</main>
+</body>
+</html>

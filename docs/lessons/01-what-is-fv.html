@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What Formal Verification Is</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 1</p>
+<h1>What formal verification is (and isn't)</h1>
+<p class="lede">Formal verification means writing down exactly what "correct" means for a
+piece of code, and then having a program check a proof that the code meets that definition for
+every possible input.</p>
+
+<h2>Tests and proofs</h2>
+<p>Here's a unit test you might write for a function that rounds to two decimal places:</p>
+<pre><code>TEST(Round, HalfGoesUp) {
+  EXPECT_EQ(round2("2.675"), "2.68");
+  EXPECT_EQ(round2("-2.675"), "-2.68");
+  EXPECT_EQ(round2("677.58"), "677.58");
+}</code></pre>
+<p>It's a good test. But logically it says only "<em>there exist</em> three inputs on which
+the function is right". Whether it's right on the other inputs is up to you to guess.</p>
+<p>A formal specification says what "right" means for <em>every</em> input. In this
+project, the rounding spec says, roughly:</p>
+<blockquote><p>For every exact decimal <var>x</var>, the answer <var>k</var> is within ½ of
+<var>x</var>; and if <var>x</var> is exactly halfway between two candidates, <var>k</var> is the one farther from zero.</p></blockquote>
+<p>A <strong>proof</strong> is an argument that the code always gives an answer of that kind.
+It's written in a language that a program can check
+mechanically, step by step, so you don't have to take anyone's word for it, including the
+author's.</p>
+
+<div class="box cpp"><span class="box-title">C++ analogy</span>
+<p>You already rely on a proof checker every day: the type checker. When your code compiles,
+the compiler has proved that no call anywhere passes a <code>std::string</code> where an
+<code>int</code> is expected. It proved this for every possible run, without running
+anything. <code>static_assert</code> is a tiny step further: a fact checked at compile time.</p>
+<p>Formal verification extends that idea. The "types" become claims you choose, such as
+"this function returns the most recent reading" or "this program never exits 0 after failing to
+send an alert". If the proof checks, the claim holds.</p>
+</div>
+
+<h2>The three pieces</h2>
+<p>Every verified component in this project has three parts, kept in three separate directories:</p>
+<div class="table-wrap"><table>
+<tr><th>Piece</th><th>What it is</th><th>Where</th></tr>
+<tr><td><strong>Spec</strong></td><td>What "correct" means. Statements and definitions, deliberately <em>without</em> an algorithm.</td><td><a data-gh="tree/stage-6/LakeLevel/Spec"><code>LakeLevel/Spec/</code></a></td></tr>
+<tr><td><strong>Implementation</strong></td><td>The code that actually runs.</td><td><a data-gh="tree/stage-6/LakeLevel/Impl"><code>LakeLevel/Impl/</code></a></td></tr>
+<tr><td><strong>Proof</strong></td><td>A machine-checked argument that the implementation meets the spec.</td><td><a data-gh="tree/stage-6/LakeLevel/Proofs"><code>LakeLevel/Proofs/</code></a></td></tr>
+</table></div>
+<p>Here is the most important theorem in the project, the formal version of the product
+spec's sentence "it should never silently fail to alert":</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Proofs/Program.lean:336-341">/-- **R62: "it should never silently fail to alert."** If the run exits 0 and
+the alert condition held, the alert was delivered. -/
+theorem never_silently_fails (argv : List String) (w : World) (cfg : Cfg) (S : Site) (R : Reading)
+    (h : parseArgs argv = .ok cfg) (hf : Fetched cfg w S R) (ha : ShouldAlert cfg R)
+    (h0 : exitCode argv w = 0) :
+    Delivered w (alertReq cfg S R) := by</code></pre>
+<p>You don't need to read Lean yet (<a href="05-reading-lean.html">Lesson 5</a> covers it).
+In English it says:</p>
+<blockquote><p>For <strong>every</strong> command line <code>argv</code> and <strong>every</strong>
+possible world <code>w</code> (any HTTP response, any clock, any time zone, any reply from
+the notification service): if the arguments parsed to a configuration <code>cfg</code>, and
+the world sent a valid reading <code>R</code>, and an alert should be sent for
+<code>R</code>, and the program exited with status 0, then the world reported the alert as
+delivered.</p></blockquote>
+<p>Equivalently: there's no situation at all where the lake is over your threshold, the alert
+didn't go through, and the program exits 0. A cron job that checks the exit status can't be
+fooled.</p>
+
+<h2>Who checks the proof?</h2>
+<p>Lean, the language used here, has a small core called the <strong>kernel</strong>. Every
+proof, however it was produced, is reduced to a sequence of very basic logical steps that the
+kernel checks. The kernel is the part you trust. You don't have to trust the person who wrote
+the proof, or the clever automation that helped them, or the AI agents that wrote some of the
+proofs in this repository (<a href="13-behind-the-scenes.html">Lesson 13</a>). If the kernel
+accepts a proof, the theorem holds, provided the kernel itself is correct and the three standard
+axioms that everything rests on are consistent.</p>
+<p>The repository checks this explicitly: <a data-gh="blob/stage-6/scripts/Audit.lean" href="../../scripts/Audit.lean"><code>scripts/Audit.lean</code></a>
+asks the kernel, for every theorem, which axioms its proof ultimately depends on. A proof
+with a hole in it depends on an axiom called <code>sorryAx</code> and is reported as unproved:</p>
+<pre class="output pass"><code>$ lake env lean scripts/Audit.lean
+theorems proved from standard axioms only: 139 (obligations + helper lemmas)
+obligations (scripts/obligations.txt) fully proved: 48/48
+theorems still depending on sorry: 0
+definitions still depending on sorry: 0</code></pre>
+
+<h2>What "verified" does <em>not</em> mean</h2>
+<p>This is where people get misled, so it gets a whole section.</p>
+<ol>
+  <li><strong>The spec could say the wrong thing.</strong> The kernel checks that the proof
+  proves the statement. It cannot check that the statement is what you meant. If the spec says
+  "round towards zero" and you meant "round half up", you'll get a perfectly verified program
+  that does the wrong thing. Reading the theorem <em>statements</em> carefully is a human job,
+  and the most important review in the whole project. <a href="06-the-spec.html">Lesson 6</a>
+  is about this.</li>
+  <li><strong>The spec could be a copy of the code.</strong> If the spec computes the answer the
+  same way the implementation does, the proof goes through and shows nothing, because a mistake in
+  one is the same mistake in the other. Nothing in Lean, or in formal verification generally,
+  detects this. <a href="04-the-model.html">Lesson 4</a> is about this.</li>
+  <li><strong>Proofs are about a model of the world.</strong> The theorem above is about what
+  the world <em>reports</em>. If the code that talks to the network is wrong (say it reports
+  every POST as HTTP 200), every theorem stays true and the tool can still fail to alert.
+  That code is outside the proofs, and the project handles it differently (by keeping it tiny and
+  testing it hard; <a href="12-shell-and-tcb.html">Lesson 12</a>).</li>
+  <li><strong>The compiler isn't verified.</strong> Lean's compiler turns the proved
+  definitions into a native binary. A compiler bug could make the binary differ from what was
+  proved. (Some research compilers, like CompCert for C, are themselves verified. Lean's isn't.)</li>
+</ol>
+<div class="box key"><span class="box-title">In short</span>
+<p>Whatever the proofs don't cover ends up in a small, named part of the system, and that's
+where the tests go.</p>
+</div>
+
+<h2>What it costs</h2>
+<p>Lines of Lean in this project:</p>
+<div class="table-wrap"><table>
+<tr><th>Layer</th><th>Lines</th></tr>
+<tr><td>Spec (<code>Types.lean</code> + <code>Spec/</code>)</td><td>411</td></tr>
+<tr><td>Implementation (<code>Impl/</code>)</td><td>450</td></tr>
+<tr><td>Proofs (<code>Proofs/</code>)</td><td>1,826</td></tr>
+<tr><td>Unverified shell (<code>Main.lean</code>)</td><td>80</td></tr>
+</table></div>
+<p>The proofs are about four times the size of the code they verify. That ratio is typical, and
+it's why formal verification gets aimed at the parts where being wrong is expensive: crypto,
+consensus protocols, OS kernels, flight software. In this project, it's the part of the tool that
+decides whether to send an alert.</p>
+
+<h2>The flavors of formal verification</h2>
+<p>You'll hear these names. They're different tools for different jobs.</p>
+<div class="table-wrap"><table>
+<tr><th>Kind</th><th>Examples</th><th>How it works</th></tr>
+<tr><td><strong>Proof assistants</strong></td><td>Lean, Rocq (formerly Coq), Isabelle</td><td>You write the spec and the proof; the kernel checks it. The most expressive kind and the most work. <em>This project.</em></td></tr>
+<tr><td><strong>Auto-active verifiers</strong></td><td>Dafny, Why3, Frama-C (for C)</td><td>You annotate code with pre/postconditions and loop invariants; an automatic solver (SMT) tries to do the proof for you.</td></tr>
+<tr><td><strong>Model checkers</strong></td><td>TLA+ (TLC), CBMC (for C/C++), SPIN</td><td>Explore every reachable state of a (usually bounded) model and report a counterexample trace if a property fails.</td></tr>
+</table></div>
+
+<h2>So where's the program?</h2>
+<p>If you browse the repository, you'll find no C++, Python, Rust or Java outside the test
+directory. That's because <strong>Lean is also an ordinary programming language</strong>: the
+functions the proofs are about are the same functions that get compiled into the
+<code>lake-level</code> binary. There's no separate model to fall out of sync with the code.
+<a href="11-where-is-the-program.html">Lesson 11</a> follows the code from <code>.lean</code>
+files to a native executable, and shows where the proofs go (they produce no machine code at all).</p>
+
+<div class="box try"><span class="box-title">Try it</span>
+<p>Before reading on, think of a function you've written recently. Try to state, in one
+sentence, what it means for it to be correct <em>for every input</em>, without describing how
+it works. If that's hard, you've found the hardest part of formal verification. It's also
+the part that finds the most bugs, as the next two lessons show.</p>
+</div>
+
+<nav class="pager">
+  <a class="prev" href="../index.html"><span class="label">← Home</span>Formal Verification by Example</a>
+  <a class="next" href="02-the-prd.html"><span class="label">Next →</span>The program and its PRD</a>
+</nav>
+</main>
+</body>
+</html>

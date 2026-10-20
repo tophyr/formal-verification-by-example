@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Formal Verification by Example</title>
+<meta name="description" content="Lessons in formal verification for working programmers, built around one small, real program: a one-page spec, a Lean 4 implementation, and 48 machine-checked proofs.">
+<link rel="stylesheet" href="assets/style.css">
+<script src="assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="index.html">Formal Verification by Example</a>
+  <span><a href="#lessons">Lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lessons for working programmers</p>
+<h1>Formal Verification by Example</h1>
+<p class="lede">What does it actually take to prove a program correct? These lessons
+answer that with one small, real tool: it fetches the Lake Travis water level and sends an
+alert when it's high. We start from a one-page spec and end with a compiled binary and 48
+proofs that Lean has checked. Each step is a commit you can check out. You'll need
+C++-level programming experience and no theory.</p>
+
+<p>The repository is the course material. Every stage of the work is one git commit with a
+tag (<code>stage-0</code> to <code>stage-6</code>), so you can check out any stage and see the
+project exactly as it stood. The lessons link to those commits and to the
+exact lines of code they discuss.</p>
+
+<h2>What formal verification is, and why you'd want it</h2>
+<p>Formal verification is a way of proving that a program is correct for every possible input,
+not just the ones you test. You write down exactly what "correct" means, as a precise statement
+such as "if the lake is above the threshold and the program exits 0, the alert was delivered".
+Then you write a proof that your code meets it, and a tool checks the proof. If the check
+passes, no input exists that breaks the statement, however unlikely.</p>
+<p>Part of the payoff comes before any proof. Writing down exactly what "correct" means forces
+questions that ordinary specs skip. Doing that turned up a real bug in the original hundred
+lines of Python that was the inspiration for this project: it accepts
+<code>--threshold nan</code> and then never sends an alert, because every comparison with NaN
+is false. The rest of the payoff is the bugs that tests miss. Of the bugs planted in this
+project to check the proofs, one got past every test and was caught only by a proof.</p>
+<p>It isn't free. Here, the proofs are about four times the size of the code they cover. And a
+proof only guarantees what its statement says, so a carelessly worded statement proves the
+wrong thing. It's worth it where a mistake is expensive and the inputs are too varied to test
+exhaustively: parsers, protocols, money, or anything that decides whether to wake someone
+up.</p>
+<p>One of the common tools used for this type of work is a programming language called
+<strong>Lean</strong>, which can check proofs about its code.
+<a href="lessons/01-what-is-fv.html">Lesson 1</a> shows what that looks like, and
+<a href="lessons/05-reading-lean.html">Lesson 5</a> teaches enough of it to read every file in
+the repository.</p>
+
+<h2>What you need</h2>
+<ul class="compact">
+  <li><strong>Background:</strong> you can read C++ or a similar language, and you've written
+  unit tests. No maths beyond high school. Symbols like <code>∀</code> and <code>→</code> are
+  explained when they first appear, and <a href="lessons/05-reading-lean.html">Lesson 5</a> has
+  a cheat sheet.</li>
+  <li><strong>Time:</strong> about three to four hours to read everything; longer if you do
+  the "Try it" exercises.</li>
+  <li><strong>To run things yourself (optional):</strong> <code>git</code>, <code>curl</code>,
+  <code>python3</code>, and <a href="https://github.com/leanprover/elan">elan</a> (Lean's
+  version manager, similar to <code>rustup</code>). The repository pins Lean 4 v4.35.0 and
+  uses nothing outside Lean's core library.</li>
+</ul>
+
+<h2>The stages</h2>
+<p>The project is built in seven stages. Each one takes something vague from the stage before
+and makes it more exact, and each catches a different kind of mistake.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 860 400" role="img" aria-labelledby="ladder-t ladder-d">
+  <title id="ladder-t">The seven stages</title>
+  <desc id="ladder-d">A staircase descending from Stage 0, an English PRD, through requirements, a mathematical model, a Lean spec, an implementation, proofs, and finally the shell and trusted base.</desc>
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-arrowhead"/></marker></defs>
+  <g>
+    <rect class="d-box" x="10" y="10" width="300" height="44" rx="6"/>
+    <text class="d-bold" x="22" y="30">Stage 0 · PRD</text>
+    <text class="d-small" x="22" y="47">What do we want? (English prose)</text>
+
+    <rect class="d-box" x="70" y="64" width="320" height="44" rx="6"/>
+    <text class="d-bold" x="82" y="84">Stage 1 · Requirements</text>
+    <text class="d-small" x="82" y="101">Exactly what, testably? What was left unspecified?</text>
+
+    <rect class="d-box" x="130" y="118" width="320" height="44" rx="6"/>
+    <text class="d-bold" x="142" y="138">Stage 2 · Formal model</text>
+    <text class="d-small" x="142" y="155">What are the mathematical objects?</text>
+
+    <rect class="d-box accent" x="190" y="172" width="320" height="44" rx="6"/>
+    <text class="d-bold" x="202" y="192">Stage 3 · Spec in Lean</text>
+    <text class="d-small" x="202" y="209">Does a machine accept the spec?</text>
+
+    <rect class="d-box accent" x="250" y="226" width="320" height="44" rx="6"/>
+    <text class="d-bold" x="262" y="246">Stage 4 · Implementation + tests</text>
+    <text class="d-small" x="262" y="263">Does it work on examples?</text>
+
+    <rect class="d-box ok" x="310" y="280" width="320" height="44" rx="6"/>
+    <text class="d-bold" x="322" y="300">Stage 5 · Proofs</text>
+    <text class="d-small" x="322" y="317">Does it work on every input?</text>
+
+    <rect class="d-box warn" x="370" y="334" width="340" height="44" rx="6"/>
+    <text class="d-bold" x="382" y="354">Stage 6 · Shell + trusted base</text>
+    <text class="d-small" x="382" y="371">What's left unproven, and how is it covered?</text>
+  </g>
+  <path class="d-line" d="M770,20 L770,370" marker-end="url(#ah)"/>
+  <text class="d-small" x="780" y="40">vaguer</text>
+  <text class="d-small" x="780" y="200">more</text>
+  <text class="d-small" x="780" y="215">exact</text>
+  <text class="d-small" x="780" y="370">checked</text>
+  <text class="d-small" x="780" y="385">by machine</text>
+</svg>
+<figcaption>Stages 0–2 are documents. Stage 3 is where Lean enters. Stage 5 is the actual
+verification. Stage 6 lists what the proofs don't cover, and tests it.</figcaption>
+</figure>
+
+<h2 id="lessons">The lessons</h2>
+<ol class="lessons">
+  <li><span class="num">1</span><div><a class="title" href="lessons/01-what-is-fv.html">What formal verification is (and isn't)</a></div>
+    <span class="desc">What "proved" means, who checks the proofs, what they don't promise, and what they cost.</span></li>
+  <li><span class="num">2</span><div><a class="title" href="lessons/02-the-prd.html">The program and its PRD</a><span class="stage">stage-0</span></div>
+    <span class="desc">The program being rebuilt, and the one-page spec the work starts from.</span></li>
+  <li><span class="num">3</span><div><a class="title" href="lessons/03-requirements.html">Requirements: what the prose left unspecified</a><span class="stage">stage-1</span></div>
+    <span class="desc">Trying to write a yes/no test for every sentence of the spec, which turns up three real bugs in the original before any code exists.</span></li>
+  <li><span class="num">4</span><div><a class="title" href="lessons/04-the-model.html">The model: the design before the code</a><span class="stage">stage-2</span></div>
+    <span class="desc">The key design ideas: spec independence, a pure core with a thin shell, and describing I/O as a value so you can reason about every possible environment.</span></li>
+  <li><span class="num">5</span><div><a class="title" href="lessons/05-reading-lean.html">Reading Lean, for C++ programmers</a></div>
+    <span class="desc">Just enough Lean 4 to read this repository: types, pattern matching, propositions, and why a theorem is a function.</span></li>
+  <li><span class="num">6</span><div><a class="title" href="lessons/06-the-spec.html">The spec, in Lean, with nothing proved</a><span class="stage">stage-3</span></div>
+    <span class="desc">Writing down what "correct" means so a machine accepts it. 48 obligations, all marked <code>sorry</code>, and an audit that counts them.</span></li>
+  <li><span class="num">7</span><div><a class="title" href="lessons/07-implementation.html">An implementation that passes its tests</a><span class="stage">stage-4</span></div>
+    <span class="desc">Code written with proofs in mind, tests that run at compile time, and bugs planted to show the tests can fail.</span></li>
+  <li><span class="num">8</span><div><a class="title" href="lessons/08-reading-a-proof.html">Anatomy of a proof</a><span class="stage">stage-5</span></div>
+    <span class="desc">The main theorem, "it never silently fails to alert", walked through one step at a time, with what Lean shows you at each step.</span></li>
+  <li><span class="num">9</span><div><a class="title" href="lessons/09-proof-techniques.html">How the hard proofs got done</a><span class="stage">stage-5</span></div>
+    <span class="desc">Bridge lemmas, exhaustive checking by the kernel, shape lemmas, and refactoring code so it can be proved.</span></li>
+  <li><span class="num">10</span><div><a class="title" href="lessons/10-planted-bugs.html">Planted bugs: checking the checkers</a></div>
+    <span class="desc">Mutation testing applied to the tests, the proofs, the shell, and the audit, including the bug that only the proofs caught.</span></li>
+  <li><span class="num">11</span><div><a class="title" href="lessons/11-where-is-the-program.html">Where is the actual program?</a></div>
+    <span class="desc">There's no C++ or Python in the repository, because the Lean code is the program. How it becomes a native binary, and what happens to the proofs.</span></li>
+  <li><span class="num">12</span><div><a class="title" href="lessons/12-shell-and-tcb.html">The shell and the trusted base</a><span class="stage">stage-6</span></div>
+    <span class="desc">What the proofs assume, and the tests aimed at those assumptions: a curl contract test, a fake curl, and a side-by-side run against the original.</span></li>
+  <li><span class="num">13</span><div><a class="title" href="lessons/13-behind-the-scenes.html">Behind the scenes: how this was actually built</a></div>
+    <span class="desc">The real process, including dead ends, parallel proof agents, and the mistakes that the checks caught.</span></li>
+  <li><span class="num">14</span><div><a class="title" href="lessons/14-takeaways.html">What to take back to your day job</a></div>
+    <span class="desc">What's worth it outside a proof assistant, what isn't, tools for the C/C++ world, and exercises.</span></li>
+</ol>
+
+<h2>Running it yourself</h2>
+<pre><code>git log --oneline --decorate     # the seven stages
+git checkout stage-3             # e.g. the spec, nothing proved yet
+git checkout main
+
+lake build                       # type-check spec + impl + proofs, run tests, link binary
+lake env lean scripts/Audit.lean # ask Lean's kernel what every theorem depends on
+scripts/check-all.sh             # every check, in order of strength
+.lake/build/bin/lake-level --help</code></pre>
+<p>The repository's <a data-gh="blob/stage-6/README.md" href="../README.md">README</a>
+and its per-stage documents in <a data-gh="tree/stage-6/docs"><code>docs/*.md</code></a>
+are the reference material for the same work.</p>
+
+</main>
+</body>
+</html>

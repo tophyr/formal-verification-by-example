@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading Lean for C++ Programmers</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 5</p>
+<h1>Reading Lean, for C++ programmers</h1>
+<p class="lede">Just enough Lean 4 to read every file in this repository. You won't be able to
+write proofs after this lesson, but you'll be able to read a theorem and tell what it claims,
+which is the more important skill.</p>
+
+<p>Lean 4 is two things at once: a functional programming language that compiles to native
+code, and a proof assistant. Every example below is real code from the repository at
+<code>stage-6</code>, and the caption on each one links to it.</p>
+
+<h2>Data: <code>structure</code> and <code>inductive</code></h2>
+<p>A <code>structure</code> is a <code>struct</code>:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Types.lean:10-15">/-- An exact decimal `m / 10^e`. Deliberately the same shape as Lean's
+`JsonNumber`, so JSON numbers convert without rounding (A3, R16). -/
+structure Dec where
+  m : Int
+  e : Nat
+  deriving Repr, DecidableEq, Inhabited</code></pre>
+<p><code>/-- … -/</code> is a doc comment, <code>--</code> is a line comment. <code>deriving</code> asks
+the compiler to generate code: <code>Repr</code> is printing, <code>DecidableEq</code> is
+<code>operator==</code>, <code>Inhabited</code> is a default value.</p>
+<p><code>Int</code> is the integers (…, −2, −1, 0, 1, 2, …), and <code>Nat</code> is the natural
+numbers (0, 1, 2, …): whole numbers that can't be negative. Neither has fractions; that's
+<code>Rat</code>, in the table below. So <code>m</code> can be negative (−1.25 is
+<code>⟨-125, 2⟩</code>), but <code>e</code>, the number of decimal places, can't, and the type says
+so: nothing has to check or prove that <code>e</code> is at least 0. Both are <strong>arbitrary
+precision</strong>. There's
+no overflow anywhere in this project, which removes a whole class of things to prove.</p>
+<p>An <code>inductive</code> type is a tagged union, like <code>std::variant</code> with named
+alternatives that each carry their own fields:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Types.lean:79-83">/-- What the world answers to a GET. -/
+inductive GetResult where
+  | response (status : Nat) (body : String)
+  | failed (msg : String)
+  deriving Repr, DecidableEq</code></pre>
+<p>Each line starting with <code>|</code> is one alternative, called a <em>constructor</em>. Each
+group in parentheses after a constructor's name is one field, written <code>(name : Type)</code>. So
+<code>response</code> carries two fields, a <code>status</code> that is a <code>Nat</code> and a
+<code>body</code> that is a <code>String</code>, while <code>failed</code> carries one, a
+<code>msg</code>. In C++ terms, <code>response</code> is roughly a struct
+<code>{ unsigned status; std::string body; }</code>, and a <code>GetResult</code> holds either a
+<code>response</code> or a <code>failed</code>. Lean writes each field or parameter in its own
+parentheses, separated by spaces, not commas. Functions use the same notation, as the next section
+shows. Building a value works the same way: <code>.response 200 "…"</code> is a
+<code>GetResult</code> with status 200 and that body.</p>
+<p>Lean's standard library defines more types the same way. <code>Option</code>, <code>Except</code>
+and <code>List</code> are themselves <code>inductive</code> types, and <code>Array</code>, pairs and
+<code>Rat</code> are <code>structure</code>s. You'll see them as the types of fields, arguments and
+results: <code>select</code>, for example, takes a <code>List Reading</code> and returns an
+<code>Option Reading</code>. In this table, <code>α</code>, <code>β</code> and <code>ε</code> stand for
+any type, like <code>T</code> in a C++ template:</p>
+<div class="table-wrap"><table>
+<tr><th>Type</th><th>Its values</th><th>Rough C++ equivalent</th></tr>
+<tr><td><code>Option α</code></td><td><code>some x</code>, or <code>none</code></td><td><code>std::optional&lt;α&gt;</code></td></tr>
+<tr><td><code>Except ε α</code></td><td><code>.ok x</code>, or <code>.error e</code></td><td><code>std::expected&lt;α, ε&gt;</code></td></tr>
+<tr><td><code>List α</code></td><td><code>[a, b, c]</code>; <code>x :: xs</code> is <code>x</code> in front of the list <code>xs</code></td><td>an immutable singly linked list</td></tr>
+<tr><td><code>Array α</code></td><td><code>#[a, b, c]</code></td><td><code>std::vector&lt;α&gt;</code></td></tr>
+<tr><td><code>α × β</code></td><td><code>(a, b)</code></td><td><code>std::pair&lt;α, β&gt;</code></td></tr>
+<tr><td><code>Rat</code></td><td>exact fractions</td><td>no standard equivalent</td></tr>
+</table></div>
+<p>Two more pieces of syntax build values:</p>
+<div class="table-wrap"><table>
+<tr><th>Syntax</th><th>Meaning</th><th>Rough C++ equivalent</th></tr>
+<tr><td><code>⟨a, b⟩</code></td><td>the type's constructor applied to <code>a</code> and <code>b</code>, when the type has only one constructor (a <code>Dec</code>, for example)</td><td>brace-initialization: <code>Dec{a, b}</code></td></tr>
+<tr><td><code>.ok x</code></td><td>the constructor <code>ok</code> of whatever type is expected here</td><td>like writing an enum value without naming its type</td></tr>
+</table></div>
+
+<h2>Functions</h2>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Impl/Select.lean:7-11">/-- Keep the first reading seen with the latest instant: replace only on *strictly* later. -/
+def select (rs : List Reading) : Option Reading :=
+  match rs with
+  | [] =&gt; none
+  | r :: rest =&gt; some (rest.foldl (fun best x =&gt; if best.t &lt; x.t then x else best) r)</code></pre>
+<p>Reading it:</p>
+<ul>
+  <li><code>def select (rs : List Reading) : Option Reading :=</code> declares a function that takes
+  a list of readings, named <code>rs</code>, and returns an optional reading. The type after the
+  parameters is the result type, and <code>:=</code> means "is defined as": what follows is the
+  body.</li>
+  <li><code>match rs with</code> and the <code>|</code> lines below it are <strong>pattern
+  matching</strong> on <code>rs</code>: the empty list gives <code>none</code>; a list with first
+  element <code>r</code> and the rest <code>rest</code> gives <code>some (…)</code>. The compiler
+  rejects the match if a case is missing.</li>
+  <li><code>rest.foldl f r</code> is <code>std::accumulate(rest.begin(), rest.end(), r, f)</code>.</li>
+  <li><code>fun best x => …</code> is a lambda: <code>[](auto best, auto x) { … }</code>.</li>
+  <li>Function application is by juxtaposition: <code>f x y</code>, not <code>f(x, y)</code>.
+  Parentheses are only for grouping.</li>
+</ul>
+<p>In C++:</p>
+<pre><code>std::optional&lt;Reading&gt; select(std::list&lt;Reading&gt; const&amp; rs) {
+  if (rs.empty()) return std::nullopt;
+  return std::accumulate(std::next(rs.begin()), rs.end(), rs.front(),
+      [](Reading const&amp; best, Reading const&amp; x) { return best.t &lt; x.t ? x : best; });
+}</code></pre>
+
+<h3>Several parameters</h3>
+<p><code>select</code> has one parameter. A function with several lists them one after another,
+each in its own parentheses, like the fields of <code>GetResult</code> above:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Impl/Decimal.lean:37-45">/-- Round `N / D` to an integer, ties away from zero: for `N ≥ 0`,
+`⌊(N + D/2) / D⌋ = ⌊(2N + D) / 2D⌋`; mirrored for `N &lt; 0`. -/
+def roundFrac (N : Int) (D : Nat) : Int :=
+  if 0 ≤ N then (2 * N + D) / (2 * D)
+  else -((2 * (-N) + D) / (2 * D))
+
+/-- Round `d` to `n` places: the rounding of `d.m·10ⁿ / 10^d.e`. -/
+def Dec.round (n : Nat) (d : Dec) : Int :=
+  roundFrac (d.m * ((10 ^ n : Nat) : Int)) (10 ^ d.e)</code></pre>
+<ul>
+  <li><code>roundFrac</code> takes an <code>Int</code> called <code>N</code> and a <code>Nat</code>
+  called <code>D</code>, and returns an <code>Int</code>: roughly
+  <code>Int roundFrac(Int N, Nat D)</code> in C++.</li>
+  <li>Calls work the same way, with arguments separated by spaces: <code>roundFrac 5 2</code> is
+  3 (2.5, rounded away from zero). <code>Dec.round</code> calls it with two arguments, and each
+  parenthesized expression, <code>(d.m * …)</code> and <code>(10 ^ d.e)</code>, is one of them.</li>
+  <li>Written with arrows, <code>Dec.round</code>'s type is <code>Nat → Dec → Int</code>: one arrow
+  per parameter, and the last type is the result. Lean shows types this way in its messages, and
+  <a href="06-the-spec.html">Lesson 6</a> uses it for a function passed as an argument.</li>
+</ul>
+
+<h3>Pure, and total</h3>
+<p>Lean functions can't mutate anything or do I/O (except inside the <code>IO</code> type, which
+only <code>Main.lean</code> uses). They also have to be <strong>total</strong>: every case handled,
+and every call guaranteed to terminate. The compiler checks both. Code that can't be shown to
+terminate must be marked <code>partial</code>, and then you can't prove anything about it. In this
+repository exactly one function is <code>partial</code>: the shell's interpreter loop in
+<a data-gh="blob/stage-6/Main.lean#L71" href="../../Main.lean"><code>Main.lean</code></a>,
+which is outside the proofs anyway.</p>
+<p>You'll also see <code>do</code> blocks with <code>←</code> and <code>let</code>. They look
+imperative, but they're syntax for chaining <code>Option</code>/<code>Except</code> steps:
+<code>let x ← step</code> means "run <code>step</code>; if it failed, return the failure now;
+otherwise call the result <code>x</code>". It's like a chain of early returns on
+<code>std::expected</code>.</p>
+
+<h2>Statements: <code>Prop</code> versus <code>Bool</code></h2>
+<p>This is the first real difference from C++. A <code>Bool</code> is a runtime value,
+<code>true</code> or <code>false</code>. A <code>Prop</code> is a <em>statement</em>, which might be
+true or false and which you might be able to prove. <code>2 + 2 = 4</code> is a Prop. So is
+"every list has a latest reading", which you can't compute but can prove.</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Spec/Prog.lean:66-73">/-- HTTP success. -/
+def ok2xx (status : Nat) : Prop := 200 ≤ status ∧ status &lt; 300
+
+instance (s : Nat) : Decidable (ok2xx s) := by unfold ok2xx; infer_instance
+
+/-- The world delivered this POST. -/
+def Delivered (w : World) (q : Request) : Prop :=
+  ∃ status, w.post q = .response status ∧ ok2xx status</code></pre>
+<p><code>ok2xx</code> is a statement about a status code. The <code>instance … Decidable</code>
+line says it can also be <em>computed</em>, so the program may use <code>if ok2xx st then …</code>.
+<code>Delivered</code> says "there exists a status such that the world answered the POST with that
+status, and it's 2xx". It's never computed; it only appears in theorems.</p>
+<p>Specs are written as Props so they can say things code can't, like "for every list" or
+"there exists an index". The implementation is written with Bools so it can run. Compare the
+spec of a decimal's value with the implementation of comparison:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Spec/Decimal.lean:12-13">/-- The rational number a `Dec` denotes: `m / 10^e`. All semantics go through this. -/
+def Dec.val (d : Dec) : Rat := (d.m : Rat) / ((10 ^ d.e : Nat) : Rat)</code></pre>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Impl/Decimal.lean:7-9">/-- Exact comparison `a ≤ b`, by cross-multiplying: `a.m·10^b.e ≤ b.m·10^a.e`. -/
+def Dec.le (a b : Dec) : Bool :=
+  decide (a.m * ((10 ^ b.e : Nat) : Int) ≤ b.m * ((10 ^ a.e : Nat) : Int))</code></pre>
+<p>(<code>(x : Rat)</code> is a cast, like <code>static_cast&lt;Rat&gt;(x)</code>.)</p>
+
+<h2>Theorems are functions</h2>
+<p>Here's the theorem connecting those two:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Proofs/Decimal.lean:14-15">/-- Comparison is exactly rational `≤`. -/
+theorem Dec.le_iff (a b : Dec) : Dec.le a b = true ↔ a.val ≤ b.val := Dec.le_iff' a b</code></pre>
+<p>Read it as a function declaration, because that's literally what it is:</p>
+<ul>
+  <li>the <strong>name</strong> is <code>Dec.le_iff</code>;</li>
+  <li>the <strong>parameters</strong> are <code>(a b : Dec)</code>. Any two decimals: the parameters are
+  where "for all" comes from;</li>
+  <li>the <strong>return type</strong> is the statement: <code>Dec.le a b = true ↔ a.val ≤ b.val</code>,
+  "the code says ≤ if and only if the true rational values are ≤";</li>
+  <li>the <strong>body</strong>, after <code>:=</code>, is the proof. Here it's just a call to a helper
+  theorem <code>Dec.le_iff'</code> that does the real work.</li>
+</ul>
+<p>A proof of "A implies B" is a function that takes a proof of A and returns a proof of B. A
+<strong>hypothesis</strong> is just a parameter whose type is a statement. In the headline theorem
+from Lesson 1, <code>(h0 : exitCode argv w = 0)</code> is a parameter: you can only call the
+theorem if you can hand it evidence that the exit code was 0.</p>
+<p>So "the theorem is proved" means "this function type-checks". The type checker (the kernel)
+is the proof checker. (This correspondence between propositions and types, and proofs and
+programs, is called the <em>Curry–Howard correspondence</em>. You don't need the theory; you just
+need to know why a proof checker can look like a compiler.)</p>
+
+<h2>Tactics: writing a proof interactively</h2>
+<p>Writing out a whole proof by hand, as a term, gets tedious quickly. Instead, most proofs are
+written in <strong>tactic mode</strong>, entered with <code>by</code>. You see the current
+<strong>goal</strong> (what's left to prove), and each tactic transforms it, until nothing is
+left. It's like a debugger session where you step a proof instead of a program.</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Proofs/Select.lean:116-118">/-- … and only fails on an empty list. -/
+theorem select_none_iff (rs : List Reading) : select rs = none ↔ rs = [] := by
+  cases rs &lt;;&gt; simp [select]</code></pre>
+<p>This is what Lean shows you (in an editor, it appears in a side panel as you move the cursor).
+At the start, above the line are the things you have; below <code>⊢</code> is what you must prove:</p>
+<pre class="output"><code class="goal">rs : List Reading
+⊢ select rs = none ↔ rs = []</code></pre>
+<p><code>cases rs</code> splits on the two shapes a list can have, leaving two goals:</p>
+<pre class="output"><code class="goal">case nil
+⊢ select [] = none ↔ [] = []
+
+case cons
+head✝ : Reading
+tail✝ : List Reading
+⊢ select (head✝ :: tail✝) = none ↔ head✝ :: tail✝ = []</code></pre>
+<p><code>&lt;;&gt;</code> means "then run the next tactic on every resulting goal".
+<code>simp [select]</code> unfolds the definition of <code>select</code> and simplifies: in the first
+case both sides are true; in the second, both sides are false (<code>some …</code> is never
+<code>none</code>, and a non-empty list is never <code>[]</code>). No goals remain, so the proof is
+done. (The <code>✝</code> marks names Lean made up, which you can't refer to.)</p>
+
+<p>The tactics you'll see most in this repository:</p>
+<div class="table-wrap"><table>
+<tr><th>Tactic</th><th>What it does</th></tr>
+<tr><td><code>intro h</code></td><td>to prove "A → B", assume A (call it <code>h</code>) and prove B</td></tr>
+<tr><td><code>exact e</code></td><td>"here is exactly the thing you asked for"</td></tr>
+<tr><td><code>cases x</code> / <code>rcases</code> / <code>obtain ⟨a, b⟩ := h</code></td><td>split into one goal per shape of <code>x</code>; take apart an "and" or "exists"</td></tr>
+<tr><td><code>by_cases h : P</code></td><td>two goals: one where P is true, one where it's false</td></tr>
+<tr><td><code>induction</code></td><td>prove it for the empty case and for "one more", like a recursive function</td></tr>
+<tr><td><code>unfold f</code> / <code>simp [f]</code></td><td>replace <code>f</code> by its definition / rewrite and simplify with known facts</td></tr>
+<tr><td><code>rw [h]</code></td><td>rewrite using an equation <code>h : a = b</code>: replace <code>a</code> by <code>b</code></td></tr>
+<tr><td><code>omega</code></td><td>a decision procedure: proves any true linear-arithmetic fact about integers (with <code>+</code>, <code>*</code> by constants, <code>/</code> and <code>%</code> by constants)</td></tr>
+<tr><td><code>decide</code></td><td>evaluates a statement that's decidable and finite, and checks it's true</td></tr>
+<tr><td><code>refine ⟨?_, ?_⟩</code></td><td>"I'll build this pair; give me a goal for each hole"</td></tr>
+<tr><td><code>constructor</code></td><td>split an "and" or "if and only if" into its parts</td></tr>
+</table></div>
+
+<h2><code>sorry</code>: the placeholder</h2>
+<p><code>sorry</code> closes any goal without proving it. The compiler accepts it with a warning.
+It's how you write a theorem's statement before its proof, the way you might write
+<code>throw std::logic_error("TODO")</code>. Anything built on <code>sorry</code> is marked as
+depending on the axiom <code>sorryAx</code>, which is how the audit finds it. In Stage 3, every
+proof in the repository was <code>sorry</code>.</p>
+
+<h2>Symbol cheat sheet</h2>
+<div class="table-wrap"><table>
+<tr><th>Symbol</th><th>Read as</th><th>Symbol</th><th>Read as</th></tr>
+<tr><td><code>∀ x, P x</code></td><td>for every <var>x</var>, P holds</td><td><code>∃ x, P x</code></td><td>there is some <var>x</var> for which P holds</td></tr>
+<tr><td><code>A ∧ B</code></td><td>A and B</td><td><code>A ∨ B</code></td><td>A or B</td></tr>
+<tr><td><code>¬ A</code></td><td>not A</td><td><code>A → B</code></td><td>A implies B (also: function type)</td></tr>
+<tr><td><code>A ↔ B</code></td><td>A if and only if B</td><td><code>x ∈ xs</code></td><td><var>x</var> is an element of <var>xs</var></td></tr>
+<tr><td><code>⊢ G</code></td><td>the goal still to prove is G</td><td><code>h : P</code></td><td><code>h</code> is a proof of P</td></tr>
+<tr><td><code>xs ++ ys</code></td><td>list concatenation</td><td><code>x :: xs</code></td><td><var>x</var> in front of list <var>xs</var></td></tr>
+<tr><td><code>xs[i]</code></td><td>the <var>i</var>-th element (needs a proof that <var>i</var> is in range!)</td><td><code>p.1</code>, <code>p.2</code></td><td><code>p.first</code>, <code>p.second</code></td></tr>
+<tr><td><code>·</code></td><td>at the start of a line: one bullet per goal</td><td><code>&lt;;&gt;</code></td><td>apply the next tactic to every goal</td></tr>
+</table></div>
+
+<div class="box try"><span class="box-title">Try it</span>
+<p>Open <a data-gh="blob/stage-6/LakeLevel/Spec/Calendar.lean" href="../../LakeLevel/Spec/Calendar.lean"><code>LakeLevel/Spec/Calendar.lean</code></a>
+and read <code>leap</code>, <code>dim</code> and <code>nextDate</code>. You should be able to
+tell, with no help, that these are the leap-year rule, the days-in-month table, and
+"tomorrow". If you want to go further, the free books
+<a href="https://lean-lang.org/functional_programming_in_lean/">Functional Programming in Lean</a>
+and <a href="https://lean-lang.org/theorem_proving_in_lean4/">Theorem Proving in Lean 4</a> are
+the standard introductions.</p>
+</div>
+
+<nav class="pager">
+  <a class="prev" href="04-the-model.html"><span class="label">← Previous</span>The model</a>
+  <a class="next" href="06-the-spec.html"><span class="label">Next →</span>The spec, in Lean</a>
+</nav>
+</main>
+</body>
+</html>

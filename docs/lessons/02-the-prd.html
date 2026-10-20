@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Program and Its PRD</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 2 · Stage 0</p>
+<h1>The program and its PRD</h1>
+<p class="lede">This lesson introduces the program the project rebuilds, and the product
+requirements document (PRD) that the work starts from. The program is small enough to
+understand completely, and real enough to have real bugs.</p>
+
+<div class="stage-links">
+  <strong>Stage 0</strong>
+  <a data-gh="commit/1293568">commit 1293568</a>
+  <a data-gh="tree/stage-0">browse the repo at stage-0</a>
+  <a data-gh="blob/stage-0/docs/00-prd.md" href="../../docs/00-prd.md">docs/00-prd.md</a>
+</div>
+
+<h2>The program</h2>
+<p>The Lower Colorado River Authority runs the dams on the Highland Lakes in Central Texas.
+Their "Hydromet" site publishes readings from each dam through a public JSON API. For Mansfield
+Dam (site 3963), which holds back Lake Travis, a reading arrives every five minutes or so.</p>
+<p>The starting point was an existing Python script of about 100 lines,
+<code>lake_level.py</code>. It fetches the JSON, picks the newest reading, prints it, and if you
+pass <code>--threshold</code>, POSTs a push notification to your phone through
+<a href="https://ntfy.sh">ntfy.sh</a> when the lake is at or above that level. (The script is in
+this repository, unchanged, as
+<a data-gh="blob/stage-0/test/original/lake_level.py" href="../../test/original/lake_level.py"><code>test/original/lake_level.py</code></a>.
+The tests in <a href="12-shell-and-tcb.html">Lesson 12</a> run it side by side with the new
+version.)</p>
+<p>Its output, and the output of the verified version, looks like this:</p>
+<pre class="output"><code>$ lake-level
+Mansfield Dam (Lake Travis)
+  Most recent lake level: 677.58 ft (MSL)
+  Observed: 2026-10-19 10:55 PM CDT (5 min ago)
+  Full pool: 681.0 ft  (+3.42 ft from full)</code></pre>
+<p>And for automation:</p>
+<pre><code># crontab: alert me when Lake Travis reaches 685 ft
+*/15 * * * *  lake-level --threshold 685 --ntfy-topic my-lake || echo "lake-level failed" | mail -s alert me</code></pre>
+<p>Why this program? It's small, but it has most of the things that make real software hard
+to get right: untrusted input from the network, decimal numbers, dates and time zones, command-line
+parsing, a side effect that must happen reliably (the alert), and exit codes another
+program depends on.</p>
+
+<h2>The PRD</h2>
+<p>Stage 0 is a product requirements document written the way you'd write one for a colleague:
+<a data-gh="blob/stage-0/docs/00-prd.md" href="../../docs/00-prd.md"><code>docs/00-prd.md</code></a>.
+It has background, goals and non-goals, the API's URL and an example response, the output
+formats with examples, the command-line options, error handling, and acceptance criteria. Go
+and read it now; it's about three pages.</p>
+<p>It's a good PRD. A competent developer could build the program from it, and the Python
+original is more or less what you'd expect them to produce. One sentence in §6 matters more
+than the rest:</p>
+<blockquote><p>Must be reliable enough to trust for flood alerting: it should never report a wrong
+level, and should never silently fail to alert.</p></blockquote>
+<p>The later stages are all aimed at making that sentence true, and at being able to show
+that it is.</p>
+
+<h2>Why prose isn't enough</h2>
+<p>Prose works well between people who share context. "Print the most recent reading" is
+clear to the author, who knows what the data looks like. But most sentences leave some cases
+unstated, and different readers fill them in differently. A developer usually fills them in with
+whatever their language does by default, and that's where most of the bugs in
+<a href="03-requirements.html">Lesson 3</a> come from.</p>
+
+<div class="box try"><span class="box-title">Try it before you read Lesson 3</span>
+<p>Read the PRD and write down every question it doesn't answer. Aim for at least eight. For
+each, ask: "if two developers answered this differently, could one of their programs give a
+wrong answer, or fail to alert?"</p>
+<details><summary>Some of the questions Stage 1 found</summary>
+<ul class="compact">
+  <li>"Most recent" by what? The timestamp text, or the moment it denotes? What if two readings tie?</li>
+  <li>"Two decimal places": rounded how? What's 2.675?</li>
+  <li>What counts as a valid <code>--threshold</code>? Is <code>nan</code> a number?</li>
+  <li>"At or above the threshold": compared with the exact level, or the rounded one on screen?</li>
+  <li>What happens if <em>one</em> record in the response is malformed?</li>
+  <li>An unknown site returns HTTP 200 with an empty list. Is that "no readings"?</li>
+  <li>Is the data even a lake level? (The response has a field that says what kind of value it is.)</li>
+  <li>What may a user put in <code>--site</code>, given it's pasted into a URL?</li>
+  <li>What does "the notification fails to send" mean, exactly? Which HTTP statuses count as success?</li>
+  <li>Which time zone is "local"? At what moment (daylight saving changes the offset)?</li>
+</ul>
+<p>Stage 1 ended up with 21 of these, and three turned out to be real bugs in the
+original.</p>
+</details>
+</div>
+
+<div class="box process"><span class="box-title">Process note</span>
+<p>The PRD was written from the original program's behavior and its obvious intent, not as a
+precise description of what the Python does. That matters later: Stage 1 treats the Python as
+"what a competent developer produced from prose like this", and checks it against the
+requirements. If the PRD had been reverse-engineered from the code, it would have encoded the
+code's bugs as requirements.</p>
+</div>
+
+<nav class="pager">
+  <a class="prev" href="01-what-is-fv.html"><span class="label">← Previous</span>What formal verification is</a>
+  <a class="next" href="03-requirements.html"><span class="label">Next →</span>Requirements: what the prose left unspecified</a>
+</nav>
+</main>
+</body>
+</html>

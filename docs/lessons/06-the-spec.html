@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Spec in Lean</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 6 · Stage 3</p>
+<h1>The spec, in Lean, with nothing proved</h1>
+<p class="lede">Stage 3 writes the model down in Lean so that a machine accepts it. There's no
+implementation yet, and no proofs: every function body and every proof is <code>sorry</code>. What
+this stage produces is the list of theorem <em>statements</em>, which together define precisely
+what "done" means.</p>
+
+<div class="stage-links">
+  <strong>Stage 3</strong>
+  <a data-gh="commit/407dbee">commit 407dbee</a>
+  <a data-gh="compare/stage-2...stage-3">what changed since stage-2</a>
+  <a data-gh="tree/stage-3/LakeLevel">LakeLevel/ at stage-3</a>
+  <a data-gh="blob/stage-3/docs/03-lean-spec.md" href="../../docs/03-lean-spec.md">docs/03-lean-spec.md</a>
+</div>
+
+<h2>Three layers</h2>
+<div class="table-wrap"><table>
+<tr><th>Layer</th><th>Directory</th><th>At stage-3</th><th>Rule</th></tr>
+<tr><td><strong>Spec</strong></td><td><code>LakeLevel/Types.lean</code>, <code>LakeLevel/Spec/</code></td><td>complete</td><td><strong>never imports Impl</strong></td></tr>
+<tr><td><strong>Impl</strong></td><td><code>LakeLevel/Impl/</code></td><td>type signatures; bodies are <code>sorry</code></td><td></td></tr>
+<tr><td><strong>Proofs</strong></td><td><code>LakeLevel/Proofs/</code></td><td>theorem statements; proofs are <code>sorry</code></td><td>imports both</td></tr>
+</table></div>
+<p>The import rule stops one shortcut: the spec can't be <em>defined in terms of</em> the
+implementation. Without it, someone could write <code>RoundsTo x k := k = roundFrac x.num x.den</code>,
+and the proof would be one line that shows nothing. The rule doesn't stop the same algorithm from
+being typed out a second time inside the spec. That's the problem from
+<a href="04-the-model.html">Lesson 4</a>, and only review catches it. Where a spec needs
+something the implementation provides (the timestamp spec needs "the instant of a civil time"),
+it takes it as a parameter (<code>secs : Civil → Instant</code>) instead of importing it.</p>
+<p>At this stage the implementation is just signatures:</p>
+<pre><code class="lean" data-src="stage-3:LakeLevel/Impl/Select.lean:7-7">def select (rs : List Reading) : Option Reading := sorry</code></pre>
+
+<h2>Four specs worth reading closely</h2>
+
+<h3>Rounding, by relation</h3>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Spec/Decimal.lean:15-26">/-- **Rounding, relationally** (A4). `k` is a correct rounding of `x`, ties
+away from zero:
+
+* `x` is strictly within ½ of `k`, or
+* `x` is exactly ½ below `k` and positive (so `k` is farther from zero), or
+* `x` is exactly ½ above `k` and negative (likewise).
+
+No algorithm is given. Stage 5 proves exactly one `k` satisfies this. -/
+def RoundsTo (x : Rat) (k : Int) : Prop :=
+  ((k : Rat) - 1/2 &lt; x ∧ x &lt; (k : Rat) + 1/2) ∨
+  (x = (k : Rat) - 1/2 ∧ 0 &lt; x) ∨
+  (x = (k : Rat) + 1/2 ∧ x &lt; 0)</code></pre>
+<p>It's a yes/no question about a pair (<var>x</var>, <var>k</var>), over exact rationals. You
+could check an answer with it, but you can't compute one from it. The implementation
+(<a href="07-implementation.html">Lesson 7</a>) will use integer division.</p>
+
+<h3>The calendar, by characterization</h3>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Spec/Calendar.lean:36-49">/-- "Tomorrow": the obvious successor of a date. -/
+def nextDate (y mo d : Nat) : Nat × Nat × Nat :=
+  if d &lt; dim y mo then (y, mo, d + 1)
+  else if mo &lt; 12 then (y, mo + 1, 1)
+  else (y + 1, 1, 1)
+
+/-- **The day count, by characterization** (R23): `f` numbers days so that
+1970-01-01 is day 0 and every valid date's successor is one more.
+Any two such functions agree on every valid date. -/
+def DayCount (f : Nat → Nat → Nat → Int) : Prop :=
+  f 1970 1 1 = 0 ∧
+  ∀ y mo d, ValidDate y mo d →
+    let (y', mo', d') := nextDate y mo d
+    f y' mo' d' = f y mo d + 1</code></pre>
+<p><code>DayCount</code> is a property of a <em>function</em> <code>f</code>. It doesn't say how to
+compute a day number; it says what any correct day-numbering must satisfy. The obligation
+will be <code>DayCount days</code>: the implementation's <code>days</code> has the property.</p>
+<div class="box caveat"><span class="box-title">A gap</span>
+<p>The doc comment says "any two such functions agree on every valid date". That's true (it
+follows by induction along <code>nextDate</code>), but it isn't itself proved in this
+repository. It's the argument for why <code>DayCount</code> is a good spec, and you're trusting
+it on paper. Proving it would be a good exercise.</p>
+</div>
+
+<h3>Timestamp parsing, as an inverse</h3>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Spec/Calendar.lean:68-72">/-- **What the timestamp parser must do**, in one equation (A2, R14, R41):
+it accepts exactly the canonical renderings of acceptable civil times, and
+returns the instant `secs` assigns them. -/
+def ParsesTimestamps (parse : String → Option Instant) (secs : Civil → Instant) : Prop :=
+  ∀ s t, parse s = some t ↔ ∃ c, c.Acceptable ∧ s = iso c ∧ t = secs c</code></pre>
+<p>One line says everything about the parser: for every string, it succeeds exactly when the
+string is the canonical rendering (<code>iso</code>) of a real date in range, and then it returns
+that date's instant. That one line covers strictness, range checking and meaning. <code>iso</code> is
+easy to get right because rendering is easy; parsing is the hard direction, and it's specified
+in terms of the easy one.</p>
+
+<h3>"The most recent reading", declaratively</h3>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Spec/Response.lean:22-29">/-- **"The most recent reading"**, declaratively, over list indices (A1, R20–R22):
+`r` is at some index `i`; no reading is later than `r`; and every reading
+*before* index `i` is strictly earlier (so `r` is the first of the latest). -/
+def Latest (rs : List Reading) (r : Reading) : Prop :=
+  ∃ (i : Nat) (hi : i &lt; rs.length),
+    rs[i] = r ∧
+    (∀ (j : Nat) (hj : j &lt; rs.length), rs[j].t ≤ r.t) ∧
+    (∀ (j : Nat) (hj : j &lt; i), (rs[j]'(Nat.lt_trans hj hi)).t &lt; r.t)</code></pre>
+<p>Look at the last line. In Lean you can't write <code>rs[j]</code> unless you can prove
+<code>j</code> is a valid index. Here we only know <code>j &lt; i</code> and <code>i &lt;
+rs.length</code>, so the spec has to supply the proof explicitly: <code>Nat.lt_trans hj hi</code>,
+"<code>j &lt; i</code> and <code>i &lt; length</code>, so <code>j &lt; length</code>". The maths
+notation of Stage 2 didn't need this, so nobody noticed it was missing. Lean wouldn't accept the
+spec without it.</p>
+<div class="box cpp"><span class="box-title">C++ analogy</span>
+<p>It's as if <code>operator[]</code> only compiled when the compiler could see a proof that the
+index was in bounds. There's no undefined behavior, and occasionally you have to explain to
+the compiler why your index is fine.</p>
+</div>
+
+<h2>The obligations</h2>
+<p>The theorems to prove were all written at this stage, with <code>sorry</code> as the proof.
+Here's the headline one, as it was committed in Stage 3:</p>
+<pre><code class="lean" data-src="stage-3:LakeLevel/Proofs/Program.lean:80-85">/-- **R62: "it should never silently fail to alert."** If the run exits 0 and
+the alert condition held, the alert was delivered. -/
+theorem never_silently_fails (argv : List String) (w : World) (cfg : Cfg) (S : Site) (R : Reading)
+    (h : parseArgs argv = .ok cfg) (hf : Fetched cfg w S R) (ha : ShouldAlert cfg R)
+    (h0 : exitCode argv w = 0) :
+    Delivered w (alertReq cfg S R) := sorry</code></pre>
+<p>There are 48 such obligations. Their names are frozen in
+<a data-gh="blob/stage-6/scripts/obligations.txt" href="../../scripts/obligations.txt"><code>scripts/obligations.txt</code></a>,
+generated from this tag, so that later stages can't quietly drop one.</p>
+
+<h3>The audit, on day one</h3>
+<p><a data-gh="blob/stage-3/scripts/Audit.lean" href="../../scripts/Audit.lean"><code>scripts/Audit.lean</code></a>
+asks the kernel what each theorem depends on. At stage-3 it reports, correctly, that nothing is
+done:</p>
+<pre class="output fail"><code>$ lake env lean scripts/Audit.lean
+theorems proved from standard axioms only: 0
+theorems still depending on sorry: 48
+  [ …the 48 names, one per line… ]
+definitions still depending on sorry: 33
+  [ …the 33 names: the Impl functions, and the helper definitions in Proofs/ that use them… ]
+scripts/Audit.lean:61:0: error: audit failed</code></pre>
+<p>(Re-run while writing this lesson, from a checkout of <code>stage-3</code>; the name lists
+are cut here.)</p>
+<div class="box process"><span class="box-title">Process note: the audit that said "87 proved"</span>
+<p>The first draft of the audit counted every theorem in the <code>LakeLevel</code> namespace.
+It reported <strong>87 proved</strong> before any proof had been written. Lean automatically generates
+small lemmas for every structure (for example, "two <code>Dec</code>s are equal if and only if
+their fields are"), and those really are proved. They just aren't ours. A count that looks
+like progress but isn't would have misled every later stage, so the audit was fixed to count only
+theorems in <code>LakeLevel.Proofs.*</code> modules before this commit. The fix is the
+<code>inModule</code> and <code>autoGen</code> filters in the audit script.</p>
+</div>
+
+<h2>What type-checking alone bought</h2>
+<p>Nothing is proved yet, but having Lean accept the spec already rules out a class of
+mistakes prose can't avoid. Every term is defined. Every "for all" ranges over a definite type.
+Every function gets the right number and kind of arguments. And writing it forced decisions the
+maths version glossed over: <code>Latest</code>'s index proof above, and <code>ValidResp</code>
+having to say exactly <em>how</em> the list of JSON records corresponds to the list of readings
+(equal lengths, index by index).</p>
+
+<h2>Did we state the right thing?</h2>
+<p>This is the question the kernel can't answer. A green audit later will mean "each statement
+follows from the definitions". It won't mean "the statements say what the PRD meant". The only way to
+close that gap is for people to read the statements in <code>Proofs/</code> against the
+requirements, which is why they're kept short and named after requirement numbers.</p>
+<p>So read them critically. Here's one where the statement is <strong>weaker than the
+requirement</strong>:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Proofs/Args.lean:97-100">/-- Repeating an option is a usage error (A20), for every pair of values. -/
+theorem parseArgs_dup (o v w : String)
+    (ho : o ∈ ["--site", "--type", "--threshold", "--ntfy-topic"]) :
+    ∃ m, parseArgs [o, v, o, w] = .usage m := by</code></pre>
+<p>A20 says <em>any</em> option given twice is an error. This proves it only for the argument
+list <code>[o, v, o, w]</code>: the option, a value, the same option, another value, and nothing
+else. It says nothing about <code>--site 1 --json --site 2</code>, or <code>--site=1 --site 2</code>.
+(The implementation does reject those, and the end-to-end tests try
+<code>--json --json</code>, but that's tested, not proved.) Similarly, <code>parseArgs_site</code> and its siblings are
+about a command line containing only that one option.</p>
+<div class="box caveat"><span class="box-title">Found while writing this lesson</span>
+<p>This weakness wasn't flagged in the stage documents. It was noticed while writing this page,
+by reading the statements against the requirements, which is exactly the review the
+paragraph above says is needed. The general theorem is provable; it's a good exercise
+(below).</p>
+</div>
+<p>Some obligations are deliberately weak, and say so: <code>fetchReq_eq</code> and
+<code>signed_eq</code> are "template equations", proved by <code>rfl</code> ("both sides are
+literally the same once definitions are unfolded"). They're there so the template is written
+down in a theorem a reviewer will read, not because they prove anything deep.</p>
+
+<div class="box try"><span class="box-title">Try it</span>
+<p>Write the statement (just the statement, ending in <code>:= sorry</code>) of a stronger
+duplicate-option theorem: "for every argument list in which some valued option occurs twice
+(in either <code>--opt v</code> or <code>--opt=v</code> form), <code>parseArgs</code> returns
+<code>.usage</code>". You'll find that saying "occurs twice" precisely is most of the work.</p>
+</div>
+
+<nav class="pager">
+  <a class="prev" href="05-reading-lean.html"><span class="label">← Previous</span>Reading Lean</a>
+  <a class="next" href="07-implementation.html"><span class="label">Next →</span>An implementation that passes its tests</a>
+</nav>
+</main>
+</body>
+</html>

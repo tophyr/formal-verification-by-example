@@ -14,6 +14,20 @@ git checkout stage-3        # e.g. the spec in Lean, nothing proved yet
 git checkout main
 ```
 
+## Lessons
+
+[`docs/index.html`](docs/index.html) is a set of 14 lessons on this repository
+for working programmers, published as a GitHub Pages site. They cover what
+formal verification is, each stage in turn, how to read Lean and its proofs,
+the planted bugs used to check every checker, and where the actual program
+is. They're published at
+<https://tophyr.github.io/formal-verification-by-example/>. To publish a copy,
+set **Settings → Pages → Deploy from a branch → `main`, `/docs`**. Links to
+files and commits point at this repository on GitHub automatically when
+served from `OWNER.github.io/REPO`; for a custom domain, set `CONFIG_REPO` in
+`docs/assets/site.js`. `scripts/check-lessons.py` checks
+that every code excerpt in the lessons still matches the source.
+
 ## The stages
 
 | Stage | Read | Question it answers | What it caught |
@@ -70,7 +84,7 @@ Lean v4.35.0, core only, no Mathlib), `curl`, and `python3` (for tests only).
 ```
 lake build                          # spec + impl + proofs + compile-time tests + binary
 lake env lean scripts/Audit.lean    # kernel axiom audit; 48/48 obligations
-scripts/check-all.sh                # everything: build, audit, curl contract, e2e, differential
+scripts/check-all.sh                # everything: build, audit, curl contract, e2e, lessons, differential
 .lake/build/bin/lake-level --help
 ```
 
@@ -86,6 +100,7 @@ Mansfield Dam (Lake Travis)
 
 ```
 docs/00..06-*.md        one document per stage
+docs/index.html         the lessons (GitHub Pages site: docs/lessons/, docs/assets/)
 LakeLevel/Types.lean    shared data types (part of the spec)
 LakeLevel/Spec/         what "correct" means: predicates, no algorithms
 LakeLevel/Impl/         the code that runs (pure; builds a Prog value)
@@ -94,6 +109,7 @@ Main.lean               the trusted shell: interprets Prog with real I/O
 scripts/Audit.lean      asks the kernel what each theorem depends on
 scripts/obligations.txt the frozen obligation list (from tag stage-3)
 scripts/check-all.sh    every check, in order of strength
+scripts/check-lessons.py  lesson excerpts and links vs. the repository
 test/Tests.lean         compile-time example tests (Stage 4)
 test/fixtures/          trimmed live API response + doctored variants
 test/curl-contract.sh   real curl vs. the assumptions the shell makes

@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proof Techniques</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 9 · Stage 5</p>
+<h1>How the hard proofs got done</h1>
+<p class="lede">The whole-program theorems were short because the hard parts had been pushed
+into lemmas. This lesson is about those lemmas: the handful of techniques that did most of the
+work, and the places where the tools themselves were surprising.</p>
+
+<div class="stage-links">
+  <strong>Stage 5</strong>
+  <a data-gh="commit/d570d87">commit d570d87</a>
+  <a data-gh="tree/stage-5/LakeLevel/Proofs">LakeLevel/Proofs/ at stage-5</a>
+  <a data-gh="blob/stage-5/docs/05-proofs.md" href="../../docs/05-proofs.md">docs/05-proofs.md</a>
+</div>
+
+<h2>1. Bridge lemmas: state it in ℚ, prove it in ℤ</h2>
+<p>The specs are about exact rationals, because that's what they mean. But Lean's best automation
+is <code>omega</code>, which decides linear arithmetic over integers, and it knows nothing about
+fractions. So one lemma clears the denominators:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Proofs/DecimalLemmas.lean:10-11">theorem frac_lt (N M : Int) (D E : Nat) (hD : 0 &lt; D) (hE : 0 &lt; E) :
+    (N : Rat) / (D : Rat) &lt; (M : Rat) / (E : Rat) ↔ N * E &lt; M * D := by</code></pre>
+<p>It's the schoolbook rule <var>a</var>/<var>b</var> &lt; <var>c</var>/<var>d</var> ⇔
+<var>a·d</var> &lt; <var>c·b</var> for positive denominators. Its proof is about ten lines of
+fiddly rational arithmetic. Then every theorem after it (comparison, subtraction, rounding, and
+uniqueness of rounding) rewrites with it once and finishes with <code>omega</code> on integers.</p>
+<div class="box cpp"><span class="box-title">C++ analogy</span>
+<p>It's the same move as the implementation's: <code>Dec.le</code> compares by
+cross-multiplying instead of dividing. You choose a representation in which the hard operation
+disappears, then do the work there.</p>
+</div>
+
+<h2>2. Splitting a proof into algebra and an exhaustive check</h2>
+<p>The calendar was the hardest part. Inverting Hinnant's formula means recovering the year
+within a 400-year era from the day within the era:</p>
+<pre><code>yoe = (doe − doe/1460 + doe/36524 − doe/146096) / 365</code></pre>
+<p>where every <code>/</code> is integer division. <code>omega</code> couldn't prove this in one go.
+The solution was to split it into a general fact that <code>omega</code> <em>can</em> prove, and a
+finite fact that can be checked case by case:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Proofs/CalendarLemmas.lean:16-49">/-- Year-of-era from day-of-era, as in `ofDays0`. -/
+def yoeOf (doe : Nat) : Nat := (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+
+/-- First day-of-era of era-year `yoe`. -/
+def start (yoe : Nat) : Nat := yoe * 365 + yoe / 4 - yoe / 100
+
+/-- Length of shifted (March-based) era-year `yoe`: it ends with the February
+of Gregorian year `yoe + 1` (mod 400). -/
+def len (yoe : Nat) : Nat := if leap (yoe + 1) then 366 else 365
+
+theorem yoeOf_succ (a : Nat) : yoeOf a ≤ yoeOf (a + 1) := by
+  unfold yoeOf; omega
+
+theorem yoeOf_mono {a b : Nat} (hab : a ≤ b) : yoeOf a ≤ yoeOf b := by
+  induction b with
+  | zero => have : a = 0 := by omega
+            subst this; exact Nat.le_refl _
+  | succ n ih =>
+    rcases Nat.lt_or_eq_of_le hab with h1 | h1
+    · exact Nat.le_trans (ih (by omega)) (yoeOf_succ n)
+    · subst h1; exact Nat.le_refl _
+
+/-- The finite part, checked by the kernel for all 400 era-years. -/
+theorem endpoints : ∀ y, y &lt; 400 →
+    yoeOf (start y) = y ∧ yoeOf (start y + len y - 1) = y ∧
+    (y &lt; 399 → start y + len y = start (y + 1)) ∧ (y = 399 → start y + len y = 146097) := by
+  decide +kernel
+
+theorem yoeOf_eq {yoe doy : Nat} (hy : yoe &lt; 400) (hd : doy &lt; len yoe) :
+    yoeOf (start yoe + doy) = yoe := by
+  have ⟨e1, e2, _, _⟩ := endpoints yoe hy
+  have := yoeOf_mono (a := start yoe) (b := start yoe + doy) (by omega)
+  have := yoeOf_mono (a := start yoe + doy) (b := start yoe + len yoe - 1) (by omega)
+  omega</code></pre>
+<p>The argument:</p>
+<ol>
+  <li><strong>Monotone</strong> (<code>yoeOf_succ</code>, <code>yoeOf_mono</code>): the formula never goes
+  down as the day increases. <code>omega</code> proves the one-step version directly; induction
+  extends it.</li>
+  <li><strong>Right at both ends of every year</strong> (<code>endpoints</code>): for each of the 400
+  years in an era, the formula gives the right year on its first day and its last day.
+  <code>decide +kernel</code> checks all 400 cases by evaluation inside the kernel.</li>
+  <li><strong>So right in between</strong> (<code>yoeOf_eq</code>): a function that never decreases and
+  gives <var>y</var> at both ends of an interval gives <var>y</var> everywhere in it.</li>
+</ol>
+<p>That covers all 146,097 days of an era without checking them one by one. The finite check
+counts as a real proof because the kernel does the evaluating.</p>
+<div class="box key"><span class="box-title">Why <code>native_decide</code> was forbidden</span>
+<p>Lean has a faster alternative, <code>native_decide</code>, that compiles the check to native
+code and runs it. It's much quicker, but it means trusting the compiler (and adds an extra axiom,
+<code>Lean.ofReduceBool</code>, to the proof). Since the whole point is to trust only the kernel,
+it was banned, and the audit flags any theorem that depends on that axiom.</p>
+</div>
+
+<h2>3. Shape lemmas: name the few shapes a run can have</h2>
+<p>Reasoning about every possible run of the program sounds hard, but this program's runs
+have very few shapes. <code>run_ok_cases</code> proves there are exactly two for a valid command line:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Proofs/Program.lean:45-55">/-- **Every run with a valid configuration has one of two shapes**: (a) nothing
+valid was fetched, and the run is the GET then one error line, exit 1; or
+(b) the GET, the zone/clock queries, the report, then whatever `finish` does. -/
+theorem run_ok_cases (argv : List String) (w : World) (cfg : Cfg) (h : parseArgs argv = .ok cfg) :
+    ((¬ ∃ S R, Fetched cfg w S R) ∧
+      ∃ m, (main argv).run w = ([.get (fetchReq cfg), .err (errLine (sanitize m))], 1)) ∨
+    (∃ S R, Fetched cfg w S R ∧
+      (main argv).run w =
+        (.get (fetchReq cfg) :: preReport cfg R ++ .out (reportFor cfg w S R) ::
+            ((finish cfg S R).run w).1,
+         ((finish cfg S R).run w).2)) := by</code></pre>
+<p>It's proved once, by unfolding <code>main</code> and splitting on every branch. After that, most of
+the whole-program theorems are a few lines of case analysis on it, as you saw in
+<a href="08-reading-a-proof.html">Lesson 8</a>. The same trick is applied one level down, with
+lemmas such as <code>finish_events</code>, "the alert step only ever POSTs the alert or writes to
+stderr".</p>
+
+<h2>4. Theorems about the spec itself</h2>
+<p>Some theorems aren't about the code at all:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Proofs/Decimal.lean:9-12">/-- The rounding spec is *deterministic*: at most one correct answer.
+(A spec with two acceptable answers would let two "verified" programs disagree.) -/
+theorem RoundsTo.unique {x : Rat} {k k' : Int} (h : RoundsTo x k) (h' : RoundsTo x k') :
+    k = k' := RoundsTo.unique' h h'</code></pre>
+<p>If <code>RoundsTo</code> allowed two answers for some <var>x</var>, two different programs could
+both be "verified" and still print different numbers. <code>RoundsTo.unique</code> and
+<code>Latest.unique</code> rule that out. They're the formal version of testing your tests: checking
+that the spec is as tight as you think it is.</p>
+
+<h2>5. Refactoring so the code can be proved</h2>
+<p>At stage-4, <code>decode</code> was one <code>do</code> block:</p>
+<pre><code class="lean" data-src="stage-4:LakeLevel/Impl/Decode.lean:26-43">/-- Validate a decoded JSON response for `site`, and pick its most recent reading. -/
+def decode (site : Nat) (j : Json) : Except String (Site × Reading) := do
+  match j.getObjVal? "value1Type" with
+  | .ok (.str "Head") => pure ()
+  | _ => throw "response is not lake-level (Head) data"
+  match j.getObjVal? "siteNumber" with
+  | .ok (.num n) =>
+    unless Dec.le (Dec.ofJson n) ⟨site, 0⟩ &amp;&amp; Dec.le ⟨site, 0⟩ (Dec.ofJson n) do
+      throw s!"response is for a different site than {site}"
+  | .ok _ => throw "response siteNumber is not a number"
+  | .error _ => pure ()
+  let recs ← match j.getObjVal? "records" with
+    | .ok (.arr a) => pure a
+    | _ => throw "response has no records array"
+  let rs ← recs.toList.mapM parseRecord
+  match select rs with
+  | some r => pure (SiteOf site j, r)
+  | none => throw "API returned no records"</code></pre>
+<p>Its control flow was hard to take apart in a proof: every <code>match</code> and
+<code>throw</code> desugars into nested binds. It was split into named steps, each with its own
+small lemma ("<code>checkSite</code> succeeds if and only if …"):</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Impl/Decode.lean:68-75">/-- Validate a decoded JSON response for `site`, and pick its most recent reading. -/
+def decode (site : Nat) (j : Json) : Except String (Site × Reading) := do
+  checkHead j
+  checkSite site j
+  let recs ← getRecords j
+  let rs ← recs.toList.mapM parseRecord
+  let r ← pickLatest rs
+  pure (SiteOf site j, r)</code></pre>
+<p>Behavior, check order and error messages are unchanged, and the tests still pass. In this
+case, the version that was easier to prove was also easier to read. The full change is in
+<a data-gh="compare/stage-4...stage-5">the stage-5 diff</a>.</p>
+
+<h2>6. When the proof finds the spec was too weak</h2>
+<p>At stage-4, three rendering theorems carried an extra hypothesis:</p>
+<pre><code class="lean" data-src="stage-4:LakeLevel/Proofs/Decimal.lean:31-32">/-- Rendered text has the promised shape … -/
+theorem fixed_shape (n : Nat) (k : Int) (hn : 1 ≤ n) : FixedShape n (fixed n k) := sorry</code></pre>
+<p>"For at least one decimal place". When the proofs were written, Lean's linter reported that
+<code>hn</code> was never used. That means the theorem holds without it. Removing it made the theorem
+<em>stronger</em>: it now also covers <code>n = 0</code>, integer rendering, which the "N min ago"
+text actually uses and which was therefore unverified before.</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Proofs/Decimal.lean:32-33">/-- Rendered text has the promised shape … -/
+theorem fixed_shape (n : Nat) (k : Int) : FixedShape n (fixed n k) := fixed_shape' n k</code></pre>
+<p>That's the right direction for a statement to change after it's frozen. Dropping a
+hypothesis can only make a theorem cover more. Adding one would weaken it and deserves suspicion.</p>
+
+<h2>7. When the tools are surprising</h2>
+<p>Timestamps are declared as <code>abbrev Instant := Int</code>. An <code>abbrev</code> is a type alias,
+like <code>using Instant = int64_t;</code>. But <code>omega</code> doesn't look through it:</p>
+<pre class="output fail"><code>example (a b : Instant) (h : a &lt; b) : a + 1 ≤ b := by omega
+
+error: omega could not prove the goal:
+No usable constraints found. You may need to unfold definitions so `omega` can see linear arithmetic facts about `Nat` and `Int`, which may also involve multiplication, division, and modular remainder by constants.</code></pre>
+<p>"No usable constraints found", while the constraint is sitting right there. The fix is to
+restate things at type <code>Int</code>, which is why the calendar and select proofs are sprinkled with
+lines like these:</p>
+<pre><code class="lean" data-src="stage-6:LakeLevel/Proofs/Calendar.lean:54-61">/-- `civilOf` always produces a real civil time … -/
+theorem civilOf_valid (t : Instant) (ht : minInstant ≤ t) : (civilOf t).Valid := by
+  rw [minInstant_eq] at ht
+  have ht : (_ : Int) ≤ _ := ht
+  rw [civilOf_eq]
+  dsimp only [Civil.Valid]
+  have hn : 306 ≤ (t + 86400 * 719468).toNat / 86400 := by omega
+  exact ⟨(Cal.ofDays0_valid_inv _ hn).1, by omega, by omega, by omega⟩</code></pre>
+<p><code>have ht : (_ : Int) ≤ _ := ht</code> says "the same fact, but please see it as an
+<code>Int</code> comparison". Two independent proof efforts on this project ran into this.</p>
+<div class="box caveat"><span class="box-title">Why this is only an annoyance</span>
+<p>A tool that ignores your hypotheses can only make a true theorem look unprovable. It can never
+make a false one pass, because the kernel still checks whatever proof eventually gets produced.
+That's why proof assistants can use clever, unverified automation: the automation only proposes
+proofs, and the kernel checks each one.</p>
+</div>
+
+<div class="box try"><span class="box-title">Try it</span>
+<p>Delete the line <code>have ht : (_ : Int) ≤ _ := ht</code> from <code>civilOf_valid</code> and
+run <code>lake build</code>. <code>omega</code> now reports "a possible counterexample may satisfy the
+constraints <code>a ≤ -62162035200</code> where <code>a := t</code>": a moment long before year 1. It
+proposes that because it can no longer see <code>ht</code>, the hypothesis ruling it out. Then
+put the line back. Learning to read "why can't you
+prove this?" messages is most of the day-to-day skill of using a proof assistant.</p>
+</div>
+
+<nav class="pager">
+  <a class="prev" href="08-reading-a-proof.html"><span class="label">← Previous</span>Anatomy of a proof</a>
+  <a class="next" href="10-planted-bugs.html"><span class="label">Next →</span>Planted bugs: checking the checkers</a>
+</nav>
+</main>
+</body>
+</html>

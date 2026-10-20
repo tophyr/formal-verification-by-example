@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Takeaways for Your Day Job</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/site.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="home" href="../index.html">Formal Verification by Example</a>
+  <span><a href="../index.html#lessons">All lessons</a> &nbsp; <button class="theme-toggle" type="button">Dark</button></span>
+</div></header>
+<main>
+
+<p class="kicker">Lesson 14</p>
+<h1>What to take back to your day job</h1>
+<p class="lede">Most of what made this project trustworthy is a set of habits that work in any
+language, with or without a proof assistant. This lesson lists them, roughly in order of value,
+then covers when full verification is worth the cost and where to go next.</p>
+
+<h2>Habits that transfer</h2>
+
+<h3>1. Write the yes/no test for every sentence of the spec</h3>
+<p>Stage 1 found the NaN threshold bug, the string-compared timestamps, the URL injection and the
+float rounding problem before any code was written, through careful
+reading and a few experiments. Keep an <strong>ambiguity register</strong>: each question the spec
+doesn't answer, what the current code actually does (run it rather than guessing), and the decision.
+It found more bugs than anything else in this project, and it needs no tools.</p>
+
+<h3>2. Get expected values from somewhere other than the code</h3>
+<p>A test whose expected value came from running the function under test can't fail. Here, epoch
+values came from GNU <code>date</code>, text from the PRD's examples, and edge cases from the ambiguity
+register. A stub answers with a fixed value chosen by the test, never one computed from its input.</p>
+
+<h3>3. Functional core, imperative shell, and effects as data</h3>
+<p>Put the decisions in pure functions, and the I/O in a thin layer that makes no decisions. If you
+go one step further and have the core <em>return a description</em> of what it wants to do (a
+<code>Prog</code>, a list of commands, a coroutine that yields requests), you can test the whole program
+against scripted worlds, with no mocking framework, in microseconds, and the shell becomes small
+enough to read in one sitting. The pattern has a name worth searching for:
+<a href="https://www.destroyallsoftware.com/screencasts/catalog/functional-core-imperative-shell">"functional core, imperative shell"</a>.</p>
+
+<h3>4. Mutation-test your checks</h3>
+<p>Plant a plausible bug and confirm something fails. Do it for tests, for CI gates, for linters,
+for audit scripts, for monitoring alerts. Whenever a check asserts that something <em>didn't</em>
+happen, add a positive control showing the same check notices when it <em>does</em>. The vacuous glob
+in <a href="10-planted-bugs.html">Lesson 10</a> is the most common real-world failure mode of test
+suites, and the cheapest to prevent.</p>
+
+<h3>5. Name your trusted base, and contract-test your mocks</h3>
+<p>Write down what your guarantees depend on but don't check, such as the database's isolation
+level, the HTTP client's timeout behavior, or the clock. For each mock, run the same assertions against the real
+dependency once, so the mock can't drift from reality without something failing.</p>
+
+<h3>6. Use exact arithmetic for anything that makes a decision</h3>
+<p>Thresholds, money, quotas: compare exact values (integers, or decimals as integer plus scale),
+never binary floating point. Round once, at display time, with a stated rule.</p>
+
+<h3>7. Test finite domains exhaustively</h3>
+<p><code>hour12</code> has 24 inputs; the calendar proof checked 400 era-years. If a function's domain is
+small, or can be reduced to a small set of boundary cases plus a monotonicity argument, test every
+case. For a function like <code>hour12</code>, a unit test that loops over all 24 hours is as good as
+a proof.</p>
+
+<h3>8. Use property-based testing</h3>
+<p>Property-based testing sits between a few examples and every input: it checks a property against
+thousands of random inputs. Writing the property is exactly the spec-writing skill from
+<a href="06-the-spec.html">Lesson 6</a>: "parse(render(x)) == x", "the result is within ½", "the
+chosen reading is no earlier than any other". For C++,
+<a href="https://github.com/emil-e/rapidcheck">RapidCheck</a> does this in the QuickCheck style. It
+won't prove anything, but it finds a lot of bugs for the effort.</p>
+
+<h2>When full verification is worth it</h2>
+<p>The proofs here are four times the size of the code they cover, and they took the most effort
+of any stage. That's worth paying when being wrong is expensive and the logic is intricate enough
+that testing can't cover it: parsers of untrusted input, crypto, consensus and replication protocols,
+schedulers, financial calculations, safety interlocks. It isn't worth paying for code whose
+correctness is mostly "does it look right", such as UI layout or report formatting. This project
+deliberately didn't verify its report text, which is a template checked by tests. The proofs cover
+the part that decides whether to send an alert.</p>
+
+<h2>Tools, if you want to go further</h2>
+<div class="table-wrap"><table>
+<tr><th>Tool</th><th>Good for</th></tr>
+<tr><td><a href="https://www.cprover.org/cbmc/">CBMC</a></td><td>Bounded model checking of C and C++: checks assertions, overflow and memory safety for every input up to a bound, and gives a counterexample trace. The lowest-friction entry point for a C++ codebase.</td></tr>
+<tr><td><a href="https://frama-c.com/">Frama-C</a></td><td>Deductive verification of C: annotate functions with contracts, and automatic provers discharge them.</td></tr>
+<tr><td><a href="https://dafny.org/">Dafny</a></td><td>A verification-aware language: pre/postconditions and loop invariants, proved automatically where possible. Gentler than Lean.</td></tr>
+<tr><td><a href="https://lamport.azurewebsites.net/tla/tla.html">TLA+</a></td><td>Designs of concurrent and distributed systems. You verify a model of the design rather than the code, which finds design bugs before any code is written.</td></tr>
+<tr><td><a href="https://lean-lang.org/">Lean 4</a></td><td>What this project uses: full proofs about real, compiled code. The most expressive and the most work.</td></tr>
+</table></div>
+
+<h2>Where this project could go next</h2>
+<p>Each of these is a real exercise, roughly in order of difficulty:</p>
+<ol>
+  <li><strong>Strengthen <code>parseArgs_dup</code></strong> to cover an option repeated anywhere in
+  the argument list, in either form (<a href="06-the-spec.html">Lesson 6</a>). Start by writing just the
+  statement.</li>
+  <li><strong>Prove that <code>DayCount</code> pins down a unique function</strong> on valid dates,
+  turning the doc comment's claim into a theorem.</li>
+  <li><strong>Give <code>leanchecker</code> a negative control</strong>, so its exit code of 0 means
+  something (<a href="10-planted-bugs.html">Lesson 10</a>).</li>
+  <li><strong>Add alert de-duplication across cron runs</strong>, which the PRD lists as a non-goal. The tool would
+  have to remember state between runs, and the interesting properties ("never two alerts for the same
+  high-water event", "never zero alerts for a new one") are about sequences of runs. That's a
+  natural fit for TLA+ before any code is written.</li>
+  <li><strong>Write and verify a small JSON parser</strong>, moving <code>Lean.Json.parse</code> out of
+  the trusted base (and shrinking the binary).</li>
+</ol>
+
+<h2>Summary</h2>
+<ol>
+  <li>Most bugs are found by stating precisely what "correct" means; do that first, in writing.</li>
+  <li>A spec that restates the implementation proves nothing, and no tool will tell you that yours
+  does. Write each one in a different style from the code, and have someone else check.</li>
+  <li>Describing I/O as data lets you state, and prove, properties over every possible environment.</li>
+  <li>Proofs move risk into a small, named trusted base; aim your tests there.</li>
+  <li>Every check, including the ones that check the checks, should be shown to fail at least once.</li>
+</ol>
+
+<nav class="pager">
+  <a class="prev" href="13-behind-the-scenes.html"><span class="label">← Previous</span>Behind the scenes</a>
+  <a class="next" href="../index.html"><span class="label">Back to →</span>All lessons</a>
+</nav>
+</main>
+</body>
+</html>

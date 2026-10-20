@@ -17,6 +17,9 @@ test/curl-contract.sh
 step "end-to-end: real binary, fake curl"
 test/e2e.sh
 
+step "lessons: every excerpt and link in docs/*.html matches the repository"
+python3 -I scripts/check-lessons.py
+
 step "differential: original Python vs this (informational; see docs/06)"
 test/differential.sh
 printf '\nall checks passed\n'

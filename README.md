@@ -18,18 +18,23 @@ git log --oneline --decorate
 | Stage | Artifact | Question it answers |
 |---|---|---|
 | 0 | [`docs/00-prd.md`](docs/00-prd.md) | *What do we want?* (prose) |
-| **1** | [`docs/01-requirements.md`](docs/01-requirements.md) | *Exactly what, testably? What did the prose leave unspecified?* |
-| 2 | `docs/02-formal-model.md` | *What are the mathematical objects and functions?* |
+| 1 | [`docs/01-requirements.md`](docs/01-requirements.md) | *Exactly what, testably? What did the prose leave unspecified?* |
+| **2** | [`docs/02-formal-model.md`](docs/02-formal-model.md) | *What are the mathematical objects and functions?* |
 | 3 | `LakeLevel/Spec/*.lean` | *Can a machine type-check the spec?* |
 | 4 | `LakeLevel/Impl/*.lean` | *Does an implementation exist, and does it pass examples?* |
 | 5 | `LakeLevel/Proofs/*.lean` | *Does the implementation meet the spec for **all** inputs?* |
 | 6 | `Main.lean`, `test/` | *What's left unproven, and how do we cover it?* |
 
-## Current stage: 1, testable requirements
+## Current stage: 2, the formal model
 
-Trying to write a yes/no test for every sentence of the PRD turned up **21
-ambiguities**, recorded in an "ambiguity register". Two of them were real
-bugs in the original implementation: a `nan` threshold silently disables
-alerting, and timestamps were compared as strings. Each requirement is now
-tagged with how it will be checked: **P**roved, **T**ested, **I**nspected,
-or **A**ssumed.
+The requirements become mathematical objects: exact decimals (`ℤ × ℕ`), a
+*relational* spec of rounding, a calendar specified by *characterization*
+(`days(epoch) = 0`, `days(next d) = days d + 1`) rather than by a formula,
+and a declarative spec of "most recent". The most important decision is to
+model the whole program as a *data structure that describes its I/O*, so
+that properties like "never exit 0 after failing to alert" can be stated
+for **every possible environment**.
+
+Stage 1 found one real bug (a `nan` threshold silently disables alerting)
+and one latent one (timestamps compared as strings, which works only
+because the API happens to use a single format).

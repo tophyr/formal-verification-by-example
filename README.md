@@ -19,22 +19,30 @@ git log --oneline --decorate
 |---|---|---|
 | 0 | [`docs/00-prd.md`](docs/00-prd.md) | *What do we want?* (prose) |
 | 1 | [`docs/01-requirements.md`](docs/01-requirements.md) | *Exactly what, testably? What did the prose leave unspecified?* |
-| **2** | [`docs/02-formal-model.md`](docs/02-formal-model.md) | *What are the mathematical objects and functions?* |
-| 3 | `LakeLevel/Spec/*.lean` | *Can a machine type-check the spec?* |
+| 2 | [`docs/02-formal-model.md`](docs/02-formal-model.md) | *What are the mathematical objects and functions?* |
+| **3** | [`docs/03-lean-spec.md`](docs/03-lean-spec.md), `LakeLevel/{Spec,Impl,Proofs}/` | *Can a machine type-check the spec?* |
 | 4 | `LakeLevel/Impl/*.lean` | *Does an implementation exist, and does it pass examples?* |
 | 5 | `LakeLevel/Proofs/*.lean` | *Does the implementation meet the spec for **all** inputs?* |
 | 6 | `Main.lean`, `test/` | *What's left unproven, and how do we cover it?* |
 
-## Current stage: 2, the formal model
+## Building
 
-The requirements become mathematical objects: exact decimals (`ℤ × ℕ`), a
-*relational* spec of rounding, a calendar specified by *characterization*
-(`days(epoch) = 0`, `days(next d) = days d + 1`) rather than by a formula,
-and a declarative spec of "most recent". The most important decision is to
-model the whole program as a *data structure that describes its I/O*, so
-that properties like "never exit 0 after failing to alert" can be stated
-for **every possible environment**.
+Requires [elan](https://github.com/leanprover/elan) (the Lean toolchain
+manager); `lean-toolchain` pins Lean v4.35.0.
 
-Stage 1 found one real bug (a `nan` threshold silently disables alerting)
-and one latent one (timestamps compared as strings, which works only
-because the API happens to use a single format).
+```
+lake build                          # type-check everything
+lake env lean scripts/Audit.lean    # which theorems are actually proved?
+```
+
+## Current stage: 3, the spec in Lean with nothing proved
+
+The model from Stage 2 is now Lean code that type-checks. The
+implementations are signatures with `sorry` bodies, and all 48 obligations
+are stated, but none is proved. The audit reports exactly that:
+
+```
+theorems proved from standard axioms only: 0
+theorems still depending on sorry: 48
+definitions still depending on sorry: 33
+```

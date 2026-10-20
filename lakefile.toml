@@ -1,0 +1,6 @@
+name = "lake-level"
+version = "0.1.0"
+defaultTargets = ["LakeLevel"]
+
+[[lean_lib]]
+name = "LakeLevel"

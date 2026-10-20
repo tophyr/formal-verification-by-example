@@ -1,4 +1,4 @@
-import LakeLevel.Types
+import LakeLevel.Spec.Decimal
 
 /-!
 # Spec: the calendar, timestamps, 12-hour clock
@@ -30,6 +30,9 @@ def ValidDate (y mo d : Nat) : Prop :=
 def Civil.Valid (c : Civil) : Prop :=
   ValidDate c.y c.mo c.d ∧ c.h < 24 ∧ c.mi < 60 ∧ c.s < 60
 
+instance (y mo d : Nat) : Decidable (ValidDate y mo d) := by unfold ValidDate; infer_instance
+instance (c : Civil) : Decidable c.Valid := by unfold Civil.Valid; infer_instance
+
 /-- "Tomorrow": the obvious successor of a date. -/
 def nextDate (y mo d : Nat) : Nat × Nat × Nat :=
   if d < dim y mo then (y, mo, d + 1)
@@ -45,9 +48,6 @@ def DayCount (f : Nat → Nat → Nat → Int) : Prop :=
     let (y', mo', d') := nextDate y mo d
     f y' mo' d' = f y mo d + 1
 
-/-- The character for a digit `0 ≤ n ≤ 9`. -/
-def digitChar (n : Nat) : Char := Char.ofNat ('0'.toNat + n)
-
 /-- Zero-padded, fixed-width decimal (template). -/
 def pad2 (n : Nat) : List Char := [digitChar (n / 10 % 10), digitChar (n % 10)]
 def pad4 (n : Nat) : List Char :=
@@ -62,6 +62,8 @@ def iso (c : Civil) : String := String.ofList (isoChars c)
 
 /-- A timestamp the API may send: valid, 1970 ≤ year ≤ 9999 (A2). -/
 def Civil.Acceptable (c : Civil) : Prop := c.Valid ∧ 1970 ≤ c.y ∧ c.y ≤ 9999
+
+instance (c : Civil) : Decidable c.Acceptable := by unfold Civil.Acceptable; infer_instance
 
 /-- **What the timestamp parser must do**, in one equation (A2, R14, R41):
 it accepts exactly the canonical renderings of acceptable civil times, and

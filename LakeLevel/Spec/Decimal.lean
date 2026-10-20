@@ -28,6 +28,9 @@ def RoundsTo (x : Rat) (k : Int) : Prop :=
 /-- The value of a decimal digit character. -/
 def digitVal (c : Char) : Nat := c.toNat - '0'.toNat
 
+/-- The character for a digit `0 ≤ n ≤ 9`. -/
+def digitChar (n : Nat) : Char := Char.ofNat ('0'.toNat + n)
+
 /-- **Positional notation**, written right-recursively with powers of ten:
 `d₀ d₁ … dₙ₋₁ = d₀·10ⁿ⁻¹ + (d₁ … dₙ₋₁)`. (The implementation uses a
 left fold with an accumulator; Stage 5 proves they agree.) -/

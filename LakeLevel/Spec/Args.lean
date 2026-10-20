@@ -20,6 +20,10 @@ def TypeSyntax (s : String) : Prop :=
 def TopicSyntax (s : String) : Prop :=
   1 ≤ s.length ∧ s.length ≤ 64 ∧ ∀ c ∈ s.toList, c.isAlphanum ∨ c = '-' ∨ c = '_'
 
+instance (s : String) : Decidable (SiteSyntax s) := by unfold SiteSyntax; infer_instance
+instance (s : String) : Decidable (TypeSyntax s) := by unfold TypeSyntax; infer_instance
+instance (s : String) : Decidable (TopicSyntax s) := by unfold TopicSyntax; infer_instance
+
 /-- Every field of a configuration is syntactically valid, and a threshold's
 value is exactly what its text denotes. -/
 def CfgSound (cfg : Cfg) : Prop :=

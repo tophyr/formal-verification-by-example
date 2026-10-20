@@ -1,6 +1,6 @@
 name = "lake-level"
 version = "0.1.0"
-defaultTargets = ["LakeLevel", "Tests"]
+defaultTargets = ["LakeLevel", "Tests", "lake-level"]
 
 [[lean_lib]]
 name = "LakeLevel"
@@ -9,3 +9,6 @@ name = "LakeLevel"
 name = "Tests"
 srcDir = "test"
 
+[[lean_exe]]
+name = "lake-level"
+root = "Main"

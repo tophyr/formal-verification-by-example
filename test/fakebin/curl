@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Fake curl for test/e2e.sh. Reproduces the real-curl output contract that
+# test/curl-contract.sh verifies against real curl, and logs every call.
+#   FAKE_LOG          directory to log calls into (required)
+#   FAKE_GET_BODY     file served as the GET response body
+#   FAKE_GET_STATUS   GET status code (default 200)
+#   FAKE_POST_STATUS  POST status code (default 200)
+#   FAKE_FAIL         "get" or "post": simulate a transport failure for that method
+#   FAKE_STDOUT       file the binary's stdout is going to; its size at POST time is logged
+set -u
+method="" url=""
+args=("$@")
+for ((i = 0; i < $#; i++)); do
+  case "${args[$i]}" in
+    --request) method=${args[$((i + 1))]} ;;
+    --) url=${args[$((i + 1))]} ;;
+  esac
+done
+n=$(find "$FAKE_LOG" -name '*.args' | wc -l)
+printf '%s\n' "$@" > "$FAKE_LOG/$n-$method.args"
+printf '%s' "$url" > "$FAKE_LOG/$n-$method.url"
+if [ "$method" = POST ]; then
+  cat > "$FAKE_LOG/$n-POST.body"
+  [ -n "${FAKE_STDOUT:-}" ] && stat -c %s "$FAKE_STDOUT" > "$FAKE_LOG/$n-POST.stdout-bytes-before"
+  if [ "${FAKE_FAIL:-}" = post ]; then echo "curl: (28) Operation timed out after 30001 milliseconds" >&2; exit 28; fi
+  printf '\n%s' "${FAKE_POST_STATUS:-200}"
+else
+  if [ "${FAKE_FAIL:-}" = get ]; then echo "curl: (6) Could not resolve host: hydromet.lcra.org" >&2; exit 6; fi
+  cat "$FAKE_GET_BODY"
+  printf '\n%s' "${FAKE_GET_STATUS:-200}"
+fi
